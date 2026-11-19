@@ -47,7 +47,7 @@ let view = {
   roomId: null
 };
 
-// Câmera da cidade
+// Câmera da cidade e câmera interna (recepção/quarto)
 const cam = {
   x: WORLD_W / 2,
   y: WORLD_H / 2,
@@ -57,6 +57,24 @@ const cam = {
   lastY: 0,
   moved: false
 };
+
+const innerCam = {
+  zoom: 1,
+  x: 0,
+  y: 0
+};
+
+function resetInnerCam() {
+  innerCam.zoom = 1;
+  innerCam.x = 0;
+  innerCam.y = 0;
+}
+
+function clampInnerCam() {
+  innerCam.zoom = Math.max(0.75, Math.min(2.8, innerCam.zoom));
+  innerCam.x = Math.max(-240, Math.min(240, innerCam.x));
+  innerCam.y = Math.max(-200, Math.min(200, innerCam.y));
+}
 
 // Jogador e entidades vivas
 const player = { x: 12 * TILE, y: 9.5 * TILE, targetX: null, targetY: null, speed: 150 };
@@ -217,6 +235,7 @@ function closeModal() {
 
 // ---------------- NAVEGAÇÃO E MODAIS ----------------
 function enterBuilding(buildingId) {
+  resetInnerCam();
   view = { mode: 'reception', buildingId, floorId: null, apartmentId: null, roomId: null };
   updateTopbar();
 }
@@ -357,6 +376,7 @@ function openReceptionModal() {
 }
 
 function enterRoom(buildingId, floorId, apartmentId, roomId) {
+  resetInnerCam();
   view = { mode: 'room', buildingId, floorId, apartmentId, roomId };
   editMode = false;
   btnToggleEdit.textContent = '✏️ Modo Edição: OFF';
@@ -579,6 +599,11 @@ function renderReception(now) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!b) return;
 
+  ctx.save();
+  ctx.translate(canvas.width / 2 + innerCam.x, canvas.height / 2 + innerCam.y);
+  ctx.scale(innerCam.zoom, innerCam.zoom);
+  ctx.translate(-canvas.width / 2, -canvas.height / 2);
+
   const cols = 7;
   const rows = 5;
   const tileW = Math.min(Math.floor((canvas.width - 40) / (cols + rows) * 1.9), Math.floor((canvas.height - 150) / (cols + rows) * 3.2), 76);
@@ -688,6 +713,7 @@ function renderReception(now) {
   const v2 = isoToScreen(4.5, 3.2 + Math.cos(t * 0.7) * 0.9, originX, originY, tileW, tileH);
   drawAvatar(ctx, v1.x, v1.y, '#a855f7', '');
   drawAvatar(ctx, v2.x, v2.y, '#5a7a61', '');
+  ctx.restore();
 }
 
 // ---------------- RENDERIZAÇÃO DA CIDADE ----------------
@@ -839,6 +865,11 @@ function renderRoom() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!room) return;
 
+  ctx.save();
+  ctx.translate(canvas.width / 2 + innerCam.x, canvas.height / 2 + innerCam.y);
+  ctx.scale(innerCam.zoom, innerCam.zoom);
+  ctx.translate(-canvas.width / 2, -canvas.height / 2);
+
   const cols = 7;
   const rows = 6;
   const tileW = Math.min(Math.floor((canvas.width - 40) / (cols + rows) * 1.9), Math.floor((canvas.height - 150) / (cols + rows) * 3.2), 76);
@@ -931,6 +962,7 @@ function renderRoom() {
 
   // Guarda geometria isométrica para clique
   canvas._roomGrid = { originX, originY, tileW, tileH, cols, rows };
+  ctx.restore();
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
@@ -1023,10 +1055,15 @@ window.addEventListener('keydown', (e) => { keys[e.key] = true; });
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
 canvas.addEventListener('wheel', (e) => {
-  if (view.mode !== 'city') return;
   e.preventDefault();
-  cam.zoom *= e.deltaY < 0 ? 1.12 : 0.89;
-  clampCamera();
+  const factor = e.deltaY < 0 ? 1.12 : 0.89;
+  if (view.mode === 'city') {
+    cam.zoom *= factor;
+    clampCamera();
+  } else {
+    innerCam.zoom *= factor;
+    clampInnerCam();
+  }
 }, { passive: false });
 
 const activePointers = new Map();
@@ -1035,10 +1072,10 @@ let pinchStartZoom = 1;
 
 canvas.addEventListener('pointerdown', (e) => {
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (activePointers.size === 2 && view.mode === 'city') {
+  if (activePointers.size === 2) {
     const pts = [...activePointers.values()];
     pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    pinchStartZoom = cam.zoom;
+    pinchStartZoom = view.mode === 'city' ? cam.zoom : innerCam.zoom;
     cam.dragging = false;
     cam.moved = true;
     return;
@@ -1053,22 +1090,33 @@ canvas.addEventListener('pointermove', (e) => {
   if (activePointers.has(e.pointerId)) {
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   }
-  if (activePointers.size === 2 && view.mode === 'city' && pinchStartDist) {
+  if (activePointers.size === 2 && pinchStartDist) {
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    cam.zoom = pinchStartZoom * (dist / pinchStartDist);
-    clampCamera();
+    if (view.mode === 'city') {
+      cam.zoom = pinchStartZoom * (dist / pinchStartDist);
+      clampCamera();
+    } else {
+      innerCam.zoom = pinchStartZoom * (dist / pinchStartDist);
+      clampInnerCam();
+    }
     return;
   }
-  if (!cam.dragging || view.mode !== 'city') return;
+  if (!cam.dragging) return;
   const dx = e.clientX - cam.lastX;
   const dy = e.clientY - cam.lastY;
   if (Math.hypot(dx, dy) > 4) cam.moved = true;
-  cam.x -= dx / cam.zoom;
-  cam.y -= dy / cam.zoom;
+  if (view.mode === 'city') {
+    cam.x -= dx / cam.zoom;
+    cam.y -= dy / cam.zoom;
+    clampCamera();
+  } else {
+    innerCam.x += dx;
+    innerCam.y += dy;
+    clampInnerCam();
+  }
   cam.lastX = e.clientX;
   cam.lastY = e.clientY;
-  clampCamera();
 });
 
 canvas.addEventListener('pointercancel', (e) => {
@@ -1116,9 +1164,11 @@ canvas.addEventListener('pointerup', (e) => {
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
-    // Conversão inversa tela -> grade isométrica
-    const dx = (cx - originX) / (tileW / 2);
-    const dy = (cy - originY) / (tileH / 2);
+    // Compensar zoom/arraste interno antes de converter para grade isométrica
+    const ix = (cx - (canvas.width / 2 + innerCam.x)) / innerCam.zoom + canvas.width / 2;
+    const iy = (cy - (canvas.height / 2 + innerCam.y)) / innerCam.zoom + canvas.height / 2;
+    const dx = (ix - originX) / (tileW / 2);
+    const dy = (iy - originY) / (tileH / 2);
     const gx = Math.floor((dx + dy) / 2);
     const gy = Math.floor((dy - dx) / 2);
     if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) return;
