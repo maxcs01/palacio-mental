@@ -7,8 +7,10 @@ import {
   getBuildingCondition
 } from './data.js';
 import {
+  drawIsoBox,
   drawPixelBuilding,
   drawHouse,
+  drawMuseum,
   drawTree,
   drawAvatar,
   drawCar,
@@ -570,90 +572,122 @@ function openNewBuildingModal() {
   };
 }
 
-// ---------------- RENDERIZAÇÃO DA RECEPÇÃO ----------------
+// ---------------- RENDERIZAÇÃO DA RECEPÇÃO (ISOMÉTRICO 2.5D) ----------------
 function renderReception(now) {
   const b = getCurrentBuilding();
-  ctx.fillStyle = '#0f172a';
+  ctx.fillStyle = '#141c2b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!b) return;
 
-  const w = Math.min(620, canvas.width - 28);
-  const h = Math.min(400, canvas.height - 110);
-  const rx = Math.floor((canvas.width - w) / 2);
-  const ry = Math.floor((canvas.height - 50 - h) / 2) + 8;
+  const cols = 7;
+  const rows = 5;
+  const tileW = Math.min(Math.floor((canvas.width - 40) / (cols + rows) * 1.9), Math.floor((canvas.height - 150) / (cols + rows) * 3.2), 76);
+  const tileH = Math.floor(tileW / 2);
+  const originX = Math.floor(canvas.width / 2) - Math.floor((cols - rows) * (tileW / 4));
+  const originY = Math.floor((canvas.height - 60) / 2) - Math.floor((cols + rows) * (tileH / 4)) + 34;
+  const wallH = Math.floor(tileW * 1.25);
 
-  // Parede da recepção
-  ctx.fillStyle = '#cbd5e1';
-  ctx.fillRect(rx, ry, w, Math.floor(h * 0.38));
-  // Rodapé
-  ctx.fillStyle = b.color || '#38bdf8';
-  ctx.fillRect(rx, ry + Math.floor(h * 0.35), w, 8);
+  const p0 = isoToScreen(0, 0, originX, originY, tileW, tileH);
+  const pLeft = isoToScreen(0, rows, originX, originY, tileW, tileH);
+  const pRight = isoToScreen(cols, 0, originX, originY, tileW, tileH);
 
-  // Piso quadriculado de hospital
-  const floorY = ry + Math.floor(h * 0.38);
-  const floorH = h - Math.floor(h * 0.38);
-  const tile = 28;
-  for (let py = 0; py < floorH; py += tile) {
-    for (let px = 0; px < w; px += tile) {
-      const even = ((px / tile) + (py / tile)) % 2 === 0;
-      ctx.fillStyle = even ? '#f1f5f9' : '#e2e8f0';
-      ctx.fillRect(rx + px, floorY + py, Math.min(tile, w - px), Math.min(tile, floorH - py));
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#1e293b';
+
+  // Parede esquerda (creme hospitalar + faixa da cor do prédio)
+  ctx.fillStyle = '#e8e2d5';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - wallH); ctx.lineTo(pLeft.x, pLeft.y - wallH);
+  ctx.lineTo(pLeft.x, pLeft.y); ctx.lineTo(p0.x, p0.y);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle = b.color || '#5a7a61';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - 14); ctx.lineTo(pLeft.x, pLeft.y - 14);
+  ctx.lineTo(pLeft.x, pLeft.y); ctx.lineTo(p0.x, p0.y);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  // Parede direita (sombreada)
+  ctx.fillStyle = '#d6cfc0';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - wallH); ctx.lineTo(pRight.x, pRight.y - wallH);
+  ctx.lineTo(pRight.x, pRight.y); ctx.lineTo(p0.x, p0.y);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle = b.color || '#46614c';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - 14); ctx.lineTo(pRight.x, pRight.y - 14);
+  ctx.lineTo(pRight.x, pRight.y); ctx.lineTo(p0.x, p0.y);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  // Piso isométrico da recepção
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const top = isoToScreen(c, r, originX, originY, tileW, tileH);
+      const right = isoToScreen(c + 1, r, originX, originY, tileW, tileH);
+      const bottom = isoToScreen(c + 1, r + 1, originX, originY, tileW, tileH);
+      const left = isoToScreen(c, r + 1, originX, originY, tileW, tileH);
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#f1ede4' : '#e2ddd2';
+      ctx.beginPath();
+      ctx.moveTo(top.x, top.y); ctx.lineTo(right.x, right.y);
+      ctx.lineTo(bottom.x, bottom.y); ctx.lineTo(left.x, left.y);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(30, 41, 59, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
   }
 
-  // Quadro de Índice na parede (clicável!)
-  const boardW = Math.min(280, Math.floor(w * 0.48));
-  const boardH = Math.floor(h * 0.28);
-  const boardX = rx + 20;
-  const boardY = ry + 14;
+  // Balcão isométrico da Recepção + Atendente
+  const deskPos = isoToScreen(4.6, 1.3, originX, originY, tileW, tileH);
+  drawAvatar(ctx, deskPos.x + 8, deskPos.y - 20, '#f8fafc', 'Recepção');
+  drawIsoBox(ctx, deskPos.x, deskPos.y, tileW * 1.4, tileH * 0.85, 22, '#c2956e', '#a37854', '#855f40', '#1e293b');
+
+  // Quadro de Índice em destaque no topo esquerdo (clicável!)
+  const boardW = Math.min(270, Math.floor(canvas.width * 0.62));
+  const boardH = 92;
+  const boardX = Math.max(16, Math.floor(p0.x - boardW - 18));
+  const boardY = Math.max(14, Math.floor(p0.y - wallH + 6));
   ctx.fillStyle = '#0f172a';
-  ctx.fillRect(boardX, boardY, boardW, boardH);
   ctx.strokeStyle = '#facc15';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(boardX, boardY, boardW, boardH);
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.roundRect(boardX, boardY, boardW, boardH, 8);
+  ctx.fill();
+  ctx.stroke();
 
   ctx.fillStyle = '#facc15';
-  ctx.font = 'bold 11px monospace';
+  ctx.font = 'bold 11px system-ui, sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText(`ÍNDICE — ${b.name.toUpperCase()}`, boardX + 10, boardY + 18);
+  ctx.fillText(`📋 ÍNDICE — ${b.name.toUpperCase()}`, boardX + 10, boardY + 18);
 
   const cond = getBuildingCondition(b, state.decayThresholdDays);
   const statusColor = cond === 'new' ? '#22c55e' : cond === 'worn' ? '#f59e0b' : '#ef4444';
   if (b.floors.length === 0) {
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '10px monospace';
-    ctx.fillText('Clique para criar 1º andar...', boardX + 10, boardY + 38);
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillText('Clique para criar o 1º andar...', boardX + 10, boardY + 42);
   } else {
     b.floors.slice(0, 4).forEach((f, idx) => {
-      const ly = boardY + 36 + idx * 16;
+      const ly = boardY + 37 + idx * 15;
       ctx.fillStyle = statusColor;
-      ctx.fillRect(boardX + 10, ly - 7, 7, 7);
+      ctx.beginPath();
+      ctx.arc(boardX + 14, ly - 3.5, 3.5, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = '#f8fafc';
-      ctx.font = '10px monospace';
-      ctx.fillText(f.name.slice(0, 28), boardX + 22, ly);
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(f.name.slice(0, 30), boardX + 24, ly);
     });
   }
   canvas._receptionBoard = { x: boardX, y: boardY, w: boardW, h: boardH };
 
-  // Balcão da Recepção + Atendente
-  const deskX = rx + w - 160;
-  const deskY = floorY + 26;
-  drawAvatar(ctx, deskX + 55, deskY - 2, '#f8fafc', 'Recepção');
-  ctx.fillStyle = '#78350f';
-  ctx.fillRect(deskX, deskY, 130, 24);
-  ctx.fillStyle = '#b45309';
-  ctx.fillRect(deskX, deskY, 130, 6);
-
   // Pessoas circulando na recepção
   const t = now * 0.001;
-  const v1x = rx + 80 + Math.sin(t * 0.9) * 45;
-  const v2x = rx + 210 + Math.cos(t * 0.7) * 35;
-  drawAvatar(ctx, v1x, floorY + floorH * 0.55, '#a855f7', '');
-  drawAvatar(ctx, v2x, floorY + floorH * 0.72, '#22c55e', '');
-
-  // Porta de saída embaixo
-  ctx.fillStyle = '#38bdf8';
-  ctx.fillRect(rx + Math.floor(w / 2) - 24, ry + h - 8, 48, 8);
+  const v1 = isoToScreen(2.2 + Math.sin(t * 0.8) * 1.1, 3.0, originX, originY, tileW, tileH);
+  const v2 = isoToScreen(4.5, 3.2 + Math.cos(t * 0.7) * 0.9, originX, originY, tileW, tileH);
+  drawAvatar(ctx, v1.x, v1.y, '#a855f7', '');
+  drawAvatar(ctx, v2.x, v2.y, '#5a7a61', '');
 }
 
 // ---------------- RENDERIZAÇÃO DA CIDADE ----------------
@@ -666,8 +700,8 @@ function renderCity() {
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cam.x, -cam.y);
 
-  // Grama base do condado
-  ctx.fillStyle = state.isNight ? '#14532d' : '#4ade80';
+  // Grama base do condado (paleta suave aconchegante)
+  ctx.fillStyle = state.isNight ? '#1e3a2f' : '#8ab17d';
   ctx.fillRect(0, 2 * TILE, WORLD_W, 12 * TILE);
 
   // Montanhas no limite norte (sem borda preta)
@@ -737,15 +771,7 @@ function renderCity() {
   // Marcos inaugurados pelo Prefeito conforme rondas concluídas
   const rondas = state.rondasConcluidas || 0;
   if (rondas >= 1) {
-    // Museu da Medicina
-    ctx.fillStyle = '#fef3c7';
-    ctx.fillRect(16 * TILE, 10.2 * TILE, 68, 44);
-    ctx.fillStyle = '#b45309';
-    ctx.fillRect(16 * TILE - 2, 10.2 * TILE - 6, 72, 10);
-    ctx.fillStyle = '#0f172a';
-    ctx.font = 'bold 9px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('MUSEU', 16 * TILE + 34, 10.2 * TILE + 26);
+    drawMuseum(ctx, 16 * TILE, 10.2 * TILE, state.isNight);
   }
   if (rondas >= 3) {
     drawHouse(ctx, 21 * TILE, 4.5 * TILE, '#6366f1', state.isNight);

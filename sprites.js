@@ -1,173 +1,6 @@
-// Desenho procedural em Pixel Art 2D (nítido, sem borrão)
+// Desenho Isométrico 2.5D Ilustrado (contorno escuro limpo + paleta hospitalar aconchegante)
 
-export function drawPixelBuilding(ctx, x, y, w, h, baseColor, condition, isNight, label) {
-  ctx.save();
-
-  // Sombra
-  ctx.fillStyle = 'rgba(0,0,0,0.28)';
-  ctx.fillRect(x + 4, y + h - 4, w, 8);
-
-  // Cor da fachada conforme desgaste
-  let wallColor = '#e2e8f0';
-  let roofColor = baseColor;
-  if (condition === 'worn') {
-    wallColor = '#cbd5e1';
-  } else if (condition === 'old') {
-    wallColor = '#94a3b8';
-    roofColor = '#64748b';
-  }
-
-  // Brilho sutil de prédio clicável
-  ctx.strokeStyle = isNight ? '#38bdf8' : '#fef08a';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x - 2, y - 2, w + 4, h + 4);
-
-  // Corpo principal
-  ctx.fillStyle = wallColor;
-  ctx.fillRect(x, y + 14, w, h - 14);
-
-  // Telhado / Topo
-  ctx.fillStyle = roofColor;
-  ctx.fillRect(x - 2, y, w + 4, 16);
-  ctx.fillStyle = 'rgba(255,255,255,0.2)';
-  ctx.fillRect(x - 2, y, w + 4, 4);
-
-  // Cruz médica no topo
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(x + w / 2 - 2, y + 3, 4, 10);
-  ctx.fillRect(x + w / 2 - 5, y + 6, 10, 4);
-
-  // Janelas
-  const cols = 3;
-  const rows = 2;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const wx = x + 10 + c * 22;
-      const wy = y + 24 + r * 18;
-      if (isNight && condition !== 'old') {
-        ctx.fillStyle = '#fde047'; // janela acesa à noite
-      } else if (condition === 'old') {
-        ctx.fillStyle = '#1e293b'; // janela apagada/quebrada
-      } else {
-        ctx.fillStyle = '#38bdf8';
-      }
-      ctx.fillRect(wx, wy, 12, 10);
-      ctx.fillStyle = '#334155';
-      ctx.fillRect(wx + 5, wy, 2, 10);
-    }
-  }
-
-  // Porta da recepção
-  ctx.fillStyle = '#334155';
-  ctx.fillRect(x + w / 2 - 9, y + h - 18, 18, 18);
-  ctx.fillStyle = isNight ? '#fef08a' : '#7dd3fc';
-  ctx.fillRect(x + w / 2 - 7, y + h - 16, 14, 14);
-
-  // Desgaste visual (rachaduras e mato)
-  if (condition === 'worn' || condition === 'old') {
-    ctx.fillStyle = '#475569';
-    ctx.fillRect(x + 6, y + 38, 8, 2);
-    ctx.fillRect(x + 12, y + 40, 2, 6);
-    ctx.fillRect(x + w - 14, y + 28, 6, 2);
-  }
-  if (condition === 'old') {
-    // Mato crescido e sujeira
-    ctx.fillStyle = '#3f6212';
-    ctx.fillRect(x + 2, y + h - 6, 12, 6);
-    ctx.fillRect(x + w - 16, y + h - 5, 14, 5);
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.35)';
-    ctx.fillRect(x, y + 14, w, h - 14);
-  }
-
-  // Placa com nome da especialidade
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-  ctx.fillRect(x - 4, y - 18, w + 8, 15);
-  ctx.fillStyle = '#f8fafc';
-  ctx.font = 'bold 10px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(label, x + w / 2, y - 7);
-
-  ctx.restore();
-}
-
-export function drawHouse(ctx, x, y, roofColor, isNight) {
-  ctx.fillStyle = 'rgba(0,0,0,0.22)';
-  ctx.fillRect(x + 2, y + 26, 32, 6);
-  ctx.fillStyle = '#f1f5f9';
-  ctx.fillRect(x, y + 10, 32, 18);
-  ctx.fillStyle = roofColor;
-  ctx.fillRect(x - 2, y + 4, 36, 8);
-  ctx.fillStyle = isNight ? '#fde047' : '#60a5fa';
-  ctx.fillRect(x + 5, y + 14, 7, 7);
-  ctx.fillStyle = '#78350f';
-  ctx.fillRect(x + 18, y + 16, 8, 12);
-}
-
-export function drawTree(ctx, x, y, wilted) {
-  ctx.fillStyle = '#78350f';
-  ctx.fillRect(x + 6, y + 14, 6, 12);
-  if (wilted) {
-    // Árvore murcha / sem folhas
-    ctx.fillStyle = '#78350f';
-    ctx.fillRect(x + 2, y + 10, 14, 3);
-    ctx.fillRect(x + 4, y + 6, 3, 6);
-    ctx.fillRect(x + 11, y + 7, 3, 5);
-  } else {
-    ctx.fillStyle = '#15803d';
-    ctx.fillRect(x, y + 2, 18, 14);
-    ctx.fillStyle = '#22c55e';
-    ctx.fillRect(x + 3, y, 12, 8);
-  }
-}
-
-export function drawAvatar(ctx, x, y, shirtColor = '#38bdf8', label = 'Você') {
-  // Sombra
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.fillRect(x - 5, y + 8, 10, 4);
-  // Pernas
-  ctx.fillStyle = '#1e293b';
-  ctx.fillRect(x - 4, y + 3, 3, 6);
-  ctx.fillRect(x + 1, y + 3, 3, 6);
-  // Jaleco / camisa
-  ctx.fillStyle = shirtColor;
-  ctx.fillRect(x - 5, y - 5, 10, 9);
-  // Cabeça
-  ctx.fillStyle = '#fed7aa';
-  ctx.fillRect(x - 4, y - 12, 8, 7);
-  // Cabelo
-  ctx.fillStyle = '#451a03';
-  ctx.fillRect(x - 4, y - 13, 8, 3);
-
-  if (label) {
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-    ctx.fillRect(x - 16, y - 25, 32, 10);
-    ctx.fillStyle = '#fff';
-    ctx.font = '9px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(label, x, y - 17);
-  }
-}
-
-export function drawCar(ctx, x, y, color, horizontal = true) {
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
-  ctx.fillRect(x + 1, y + 2, horizontal ? 22 : 14, horizontal ? 12 : 20);
-  ctx.fillStyle = color;
-  if (horizontal) {
-    ctx.fillRect(x, y, 22, 11);
-    ctx.fillStyle = '#bae6fd';
-    ctx.fillRect(x + 5, y + 2, 11, 7);
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(x + 2, y + 10, 4, 2);
-    ctx.fillRect(x + 15, y + 10, 4, 2);
-  } else {
-    ctx.fillRect(x, y, 13, 20);
-    ctx.fillStyle = '#bae6fd';
-    ctx.fillRect(x + 2, y + 5, 9, 9);
-  }
-}
-
-// Helper para desenhar caixa isométrica 2.5D com contorno escuro limpo (estilo ilustrado)
-function drawIsoBox(ctx, cx, cy, w, d, h, topCol, leftCol, rightCol, stroke = '#1e293b') {
+export function drawIsoBox(ctx, cx, cy, w, d, h, topCol, leftCol, rightCol, stroke = '#1e293b') {
   const hw = w / 2;
   const hd = d / 2;
   ctx.lineWidth = 1.6;
@@ -206,6 +39,256 @@ function drawIsoBox(ctx, cx, cy, w, d, h, topCol, leftCol, rightCol, stroke = '#
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+}
+
+export function drawPixelBuilding(ctx, x, y, w, h, baseColor, condition, isNight, label) {
+  ctx.save();
+  const cx = x + w / 2;
+  const cy = y + h - 10;
+
+  // Sombra isométrica suave no chão
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 8, 46, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Halo sutil indicando prédio clicável
+  ctx.strokeStyle = isNight ? 'rgba(56, 189, 248, 0.7)' : 'rgba(254, 240, 138, 0.85)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 6, 48, 24, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Paleta conforme estado de conservação (Novo / Desgastado / Velho)
+  let topCol = baseColor || '#5a7a61';
+  let leftCol = '#ede9dd';
+  let rightCol = '#d6d1c4';
+  if (condition === 'worn') {
+    leftCol = '#d8d3c8';
+    rightCol = '#bdb7aa';
+  } else if (condition === 'old') {
+    topCol = '#64748b';
+    leftCol = '#94a3b8';
+    rightCol = '#758599';
+  }
+
+  // Corpo isométrico do prédio (2 andares)
+  drawIsoBox(ctx, cx, cy, 78, 40, 50, '#f8f6ef', leftCol, rightCol, '#1e293b');
+  // Cobertura / Telhado colorido
+  drawIsoBox(ctx, cx, cy - 50, 82, 42, 10, topCol, topCol, '#334155', '#1e293b');
+
+  // Cruz médica no topo isométrico
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  ctx.fillRect(cx - 3, cy - 66, 6, 12);
+  ctx.fillRect(cx - 7, cy - 63, 14, 6);
+
+  // Janelas na face esquerda e direita
+  const winCol = isNight && condition !== 'old' ? '#fde047' : condition === 'old' ? '#1e293b' : '#7ba4c7';
+  ctx.fillStyle = winCol;
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1.2;
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 2; col++) {
+      // Face esquerda
+      const lx = cx - 30 + col * 14;
+      const ly = cy - 36 + row * 18 + col * 7;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly); ctx.lineTo(lx + 9, ly + 4.5); ctx.lineTo(lx + 9, ly + 13); ctx.lineTo(lx, ly + 8.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Face direita
+      const rx = cx + 8 + col * 14;
+      const ry = cy - 29 + row * 18 - col * 7;
+      ctx.beginPath();
+      ctx.moveTo(rx, ry); ctx.lineTo(rx + 9, ry - 4.5); ctx.lineTo(rx + 9, ry + 4); ctx.lineTo(rx, ry + 8.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  // Porta da recepção na face direita inferior
+  ctx.fillStyle = isNight ? '#fef08a' : '#334155';
+  ctx.beginPath();
+  ctx.moveTo(cx + 12, cy + 12); ctx.lineTo(cx + 22, cy + 7); ctx.lineTo(cx + 22, cy - 6); ctx.lineTo(cx + 12, cy - 1);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Rachaduras / mato se desgastado ou velho
+  if (condition === 'worn' || condition === 'old') {
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - 26, cy - 10); ctx.lineTo(cx - 18, cy - 4); ctx.lineTo(cx - 20, cy + 3);
+    ctx.stroke();
+  }
+  if (condition === 'old') {
+    ctx.fillStyle = '#4d6b53';
+    ctx.beginPath();
+    ctx.ellipse(cx - 24, cy + 12, 10, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx + 26, cy + 10, 9, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Placa limpa com nome da especialidade
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 1;
+  const tagW = Math.max(76, label.length * 7 + 14);
+  ctx.beginPath();
+  ctx.roundRect(cx - tagW / 2, cy - 92, tagW, 18, 5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = 'bold 10px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, cx, cy - 79);
+
+  ctx.restore();
+}
+
+export function drawHouse(ctx, x, y, roofColor, isNight) {
+  ctx.save();
+  const cx = x + 18;
+  const cy = y + 24;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.2)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 5, 22, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+  drawIsoBox(ctx, cx, cy, 34, 18, 18, '#f1ede4', '#e8e2d5', '#d6cfc0', '#1e293b');
+  drawIsoBox(ctx, cx, cy - 18, 38, 20, 6, roofColor, roofColor, '#334155', '#1e293b');
+  // Janelinha
+  ctx.fillStyle = isNight ? '#fde047' : '#7ba4c7';
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  ctx.fillRect(cx - 11, cy - 10, 6, 6);
+  ctx.strokeRect(cx - 11, cy - 10, 6, 6);
+  ctx.restore();
+}
+
+export function drawMuseum(ctx, x, y, isNight) {
+  ctx.save();
+  const cx = x + 36;
+  const cy = y + 36;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.24)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 6, 38, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+  drawIsoBox(ctx, cx, cy, 62, 32, 30, '#fef3c7', '#f5e8c7', '#e2d0a7', '#1e293b');
+  drawIsoBox(ctx, cx, cy - 30, 66, 34, 8, '#b45309', '#92400e', '#78350f', '#1e293b');
+  ctx.fillStyle = isNight ? '#fde047' : '#1e293b';
+  ctx.font = 'bold 9px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('MUSEU', cx, cy - 42);
+  ctx.restore();
+}
+
+export function drawTree(ctx, x, y, wilted) {
+  ctx.save();
+  const cx = x + 10;
+  const cy = y + 20;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 4, 12, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1.5;
+  ctx.fillStyle = '#855f40';
+  ctx.fillRect(cx - 3, cy - 8, 6, 12);
+  ctx.strokeRect(cx - 3, cy - 8, 6, 12);
+
+  if (wilted) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 8); ctx.lineTo(cx - 8, cy - 16);
+    ctx.moveTo(cx, cy - 8); ctx.lineTo(cx + 7, cy - 15);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = '#4d6b53';
+    ctx.beginPath();
+    ctx.arc(cx, cy - 14, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#6b8e72';
+    ctx.beginPath();
+    ctx.arc(cx - 2, cy - 17, 7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+export function drawAvatar(ctx, x, y, shirtColor = '#38bdf8', label = 'Você') {
+  ctx.save();
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1.5;
+
+  // Sombra
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 8, 7, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Corpo / Jaleco ilustrado
+  ctx.fillStyle = shirtColor;
+  ctx.beginPath();
+  ctx.roundRect(x - 5, y - 5, 10, 12, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  // Cabeça
+  ctx.fillStyle = '#fed7aa';
+  ctx.beginPath();
+  ctx.arc(x, y - 10, 5.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  if (label) {
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    const w = Math.max(30, label.length * 6 + 10);
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - 28, w, 12, 4);
+    ctx.fill();
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 9px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x, y - 19);
+  }
+  ctx.restore();
+}
+
+export function drawCar(ctx, x, y, color, horizontal = true) {
+  ctx.save();
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1.4;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+  ctx.beginPath();
+  ctx.ellipse(x + (horizontal ? 12 : 7), y + (horizontal ? 11 : 18), horizontal ? 12 : 8, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = color;
+  if (horizontal) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, 24, 11, 3);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#bae6fd';
+    ctx.fillRect(x + 6, y + 2, 11, 5);
+    ctx.strokeRect(x + 6, y + 2, 11, 5);
+  } else {
+    ctx.beginPath();
+    ctx.roundRect(x, y, 14, 21, 3);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#bae6fd';
+    ctx.fillRect(x + 2, y + 5, 10, 8);
+    ctx.strokeRect(x + 2, y + 5, 10, 8);
+  }
+  ctx.restore();
 }
 
 // Objetos hospitalares isométricos 2.5D ilustrados (SEM legenda de texto!)
