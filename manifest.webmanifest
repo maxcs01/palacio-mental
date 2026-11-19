@@ -1,0 +1,9 @@
+{
+  "name": "Cidade Palácio Mental",
+  "short_name": "PalácioMental",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "description": "Palácio Mental em Pixel Art para estudos de Medicina com Cidade Viva."
+}

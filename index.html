@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <title>Cidade Palácio Mental — Protótipo</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Barra superior fixa -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="badge-pixel">🏥</span>
+        <span id="breadcrumb">Cidade Médica</span>
+      </div>
+
+      <div class="search-wrap">
+        <input id="searchInput" type="search" placeholder="Busca rápida (ex: Pneumonia, Raio-X, AVC)..." autocomplete="off" />
+        <div id="searchResults" class="search-results hidden"></div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="btnFriends" class="btn-secondary" title="Compartilhar mundo (até 10 pessoas)">👥 Amigos</button>
+        <button id="btnAccount" class="btn-secondary" title="Entrar / Sincronizar na nuvem">☁️ Nuvem</button>
+        <button id="btnDayNight" class="btn-icon" title="Alternar Dia / Noite">☀️</button>
+        <button id="btnMusic" class="btn-icon" title="Música ambiente">🎵</button>
+        <button id="btnRonda" class="btn-primary hidden">⚡ Ronda Rápida</button>
+        <button id="btnBack" class="btn-secondary hidden">← Voltar</button>
+      </div>
+    </header>
+
+    <!-- Área principal -->
+    <main class="stage">
+      <canvas id="gameCanvas"></canvas>
+
+      <!-- Controles flutuantes da Cidade -->
+      <div id="cityHud" class="hud-bottom">
+        <div class="hud-group">
+          <button id="btnZoomIn" class="btn-hud" title="Zoom +">＋</button>
+          <button id="btnZoomOut" class="btn-hud" title="Zoom -">－</button>
+          <button id="btnNewBuilding" class="btn-primary">+ Novo Prédio</button>
+        </div>
+        <div class="hud-hint" id="cityHint">
+          WASD/Setas ou toque para andar • Clique num prédio para entrar • Scroll/botões para Zoom
+        </div>
+      </div>
+
+      <!-- Barra da Recepção -->
+      <div id="receptionHud" class="hud-bottom hidden">
+        <div class="hud-group">
+          <button id="btnOpenIndex" class="btn-primary">📋 Índice dos Andares</button>
+          <button id="btnDecayConfig" class="btn-secondary">⚙️ Prazo de Desgaste</button>
+        </div>
+        <div class="hud-hint">Clique no Quadro na parede para abrir os andares e apartamentos</div>
+      </div>
+
+      <!-- Barra de Edição dentro do Cômodo -->
+      <div id="roomHud" class="hud-bottom hidden">
+        <div class="hud-group">
+          <button id="btnToggleEdit" class="btn-secondary">✏️ Modo Edição: OFF</button>
+          <button id="btnRoomRonda" class="btn-primary">🩺 Concluir Ronda do Cômodo</button>
+        </div>
+        <div id="objectPalette" class="palette hidden"></div>
+      </div>
+    </main>
+
+    <!-- Painel lateral / Modal para Recepção, Andar, Objeto ou Bibliografia -->
+    <div id="modalBackdrop" class="modal-backdrop hidden">
+      <div class="modal-card" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <h2 id="modalTitle">Título</h2>
+          <button id="modalClose" class="btn-icon">✕</button>
+        </div>
+        <div id="modalBody" class="modal-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
