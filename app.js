@@ -799,37 +799,112 @@ function renderCity() {
   ctx.restore();
 }
 
-// ---------------- RENDERIZAÇÃO DO CÔMODO ----------------
+// ---------------- RENDERIZAÇÃO DO CÔMODO (ISOMÉTRICO 2.5D) ----------------
+function isoToScreen(gx, gy, originX, originY, tileW, tileH) {
+  return {
+    x: originX + (gx - gy) * (tileW / 2),
+    y: originY + (gx + gy) * (tileH / 2)
+  };
+}
+
 function renderRoom() {
   const room = getCurrentRoom();
-  ctx.fillStyle = '#0f172a';
+  ctx.fillStyle = '#141c2b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!room) return;
 
-  const cols = 8;
+  const cols = 7;
   const rows = 6;
-  const cell = Math.min(Math.floor((canvas.width - 40) / cols), Math.floor((canvas.height - 110) / rows), 72);
-  const startX = Math.floor((canvas.width - cols * cell) / 2);
-  const startY = Math.floor((canvas.height - 60 - rows * cell) / 2) + 10;
+  const tileW = Math.min(Math.floor((canvas.width - 40) / (cols + rows) * 1.9), Math.floor((canvas.height - 150) / (cols + rows) * 3.2), 76);
+  const tileH = Math.floor(tileW / 2);
+  const originX = Math.floor(canvas.width / 2) - Math.floor((cols - rows) * (tileW / 4));
+  const originY = Math.floor((canvas.height - 60) / 2) - Math.floor((cols + rows) * (tileH / 4)) + 24;
 
-  // Piso e paredes do cômodo (vazio e sem NPCs!)
-  ctx.fillStyle = '#1e293b';
-  ctx.fillRect(startX - 8, startY - 8, cols * cell + 16, rows * cell + 16);
+  const wallH = Math.floor(tileW * 1.15);
 
+  // Parede esquerda (fundo-esquerda: gx = 0, gy de 0..rows)
+  const p0 = isoToScreen(0, 0, originX, originY, tileW, tileH);
+  const pLeft = isoToScreen(0, rows, originX, originY, tileW, tileH);
+  const pRight = isoToScreen(cols, 0, originX, originY, tileW, tileH);
+
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#1e293b';
+
+  // Parede traseira esquerda (creme aconchegante)
+  ctx.fillStyle = '#e8e2d5';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - wallH);
+  ctx.lineTo(pLeft.x, pLeft.y - wallH);
+  ctx.lineTo(pLeft.x, pLeft.y);
+  ctx.lineTo(p0.x, p0.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Faixa verde-oliva na parede esquerda
+  ctx.fillStyle = '#5a7a61';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - 14);
+  ctx.lineTo(pLeft.x, pLeft.y - 14);
+  ctx.lineTo(pLeft.x, pLeft.y);
+  ctx.lineTo(p0.x, p0.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Parede traseira direita (sombreada)
+  ctx.fillStyle = '#d6cfc0';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - wallH);
+  ctx.lineTo(pRight.x, pRight.y - wallH);
+  ctx.lineTo(pRight.x, pRight.y);
+  ctx.lineTo(p0.x, p0.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#46614c';
+  ctx.beginPath();
+  ctx.moveTo(p0.x, p0.y - 14);
+  ctx.lineTo(pRight.x, pRight.y - 14);
+  ctx.lineTo(pRight.x, pRight.y);
+  ctx.lineTo(p0.x, p0.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Piso isométrico (losangos 2:1)
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      ctx.fillStyle = (r + c) % 2 === 0 ? '#334155' : '#293548';
-      ctx.fillRect(startX + c * cell, startY + r * cell, cell - 1, cell - 1);
+      const top = isoToScreen(c, r, originX, originY, tileW, tileH);
+      const right = isoToScreen(c + 1, r, originX, originY, tileW, tileH);
+      const bottom = isoToScreen(c + 1, r + 1, originX, originY, tileW, tileH);
+      const left = isoToScreen(c, r + 1, originX, originY, tileW, tileH);
+
+      ctx.fillStyle = (r + c) % 2 === 0 ? '#f1ede4' : '#e2ddd2';
+      ctx.beginPath();
+      ctx.moveTo(top.x, top.y);
+      ctx.lineTo(right.x, right.y);
+      ctx.lineTo(bottom.x, bottom.y);
+      ctx.lineTo(left.x, left.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = editMode ? 'rgba(56, 189, 248, 0.45)' : 'rgba(30, 41, 59, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
   }
 
-  // Objetos colocados (sem legenda de texto!)
-  room.objects.forEach((obj) => {
-    drawRoomObject(ctx, obj.type, startX + obj.gx * cell, startY + obj.gy * cell, cell, editMode);
+  // Objetos ordenados por profundidade (gx + gy) para sobreposição natural
+  const sorted = [...room.objects].sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy));
+  sorted.forEach((obj) => {
+    const center = isoToScreen(obj.gx + 0.5, obj.gy + 0.5, originX, originY, tileW, tileH);
+    drawRoomObject(ctx, obj.type, center.x, center.y, tileW, editMode);
   });
 
-  // Guarda geometria para clique
-  canvas._roomGrid = { startX, startY, cell, cols, rows };
+  // Guarda geometria isométrica para clique
+  canvas._roomGrid = { originX, originY, tileW, tileH, cols, rows };
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
@@ -980,12 +1055,15 @@ canvas.addEventListener('pointerup', (e) => {
       openReceptionModal();
     }
   } else if (view.mode === 'room' && canvas._roomGrid) {
-    const { startX, startY, cell, cols, rows } = canvas._roomGrid;
+    const { originX, originY, tileW, tileH, cols, rows } = canvas._roomGrid;
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
-    const gx = Math.floor((cx - startX) / cell);
-    const gy = Math.floor((cy - startY) / cell);
+    // Conversão inversa tela -> grade isométrica
+    const dx = (cx - originX) / (tileW / 2);
+    const dy = (cy - originY) / (tileH / 2);
+    const gx = Math.floor((dx + dy) / 2);
+    const gy = Math.floor((dy - dx) / 2);
     if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) return;
 
     const room = getCurrentRoom();
