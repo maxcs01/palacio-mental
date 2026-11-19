@@ -291,6 +291,59 @@ export function drawCar(ctx, x, y, color, horizontal = true) {
   ctx.restore();
 }
 
+// Cache de sprites PNG/JPG ilustrados com remoção automática de fundo branco externo
+const SPRITE_URLS = {
+  bed: '/assets/bed.jpg',
+  monitor: '/assets/monitor.jpg',
+  ct: '/assets/ct.jpg',
+  xray: '/assets/xray.jpg'
+};
+const spriteCache = {};
+
+function stripWhiteBackground(img) {
+  const size = 256;
+  const off = document.createElement('canvas');
+  off.width = size;
+  off.height = size;
+  const octx = off.getContext('2d');
+  octx.drawImage(img, 0, 0, size, size);
+  const imgData = octx.getImageData(0, 0, size, size);
+  const d = imgData.data;
+  const visited = new Uint8Array(size * size);
+  const stack = [0, size - 1, (size - 1) * size, size * size - 1];
+
+  const isBg = (idx) => d[idx] > 235 && d[idx + 1] > 235 && d[idx + 2] > 235;
+
+  while (stack.length > 0) {
+    const p = stack.pop();
+    if (visited[p]) continue;
+    visited[p] = 1;
+    const i = p * 4;
+    if (!isBg(i)) continue;
+    d[i + 3] = 0; // transparente
+    const x = p % size;
+    const y = (p - x) / size;
+    if (x > 0) stack.push(p - 1);
+    if (x < size - 1) stack.push(p + 1);
+    if (y > 0) stack.push(p - size);
+    if (y < size - 1) stack.push(p + size);
+  }
+  octx.putImageData(imgData, 0, 0);
+  return off;
+}
+
+Object.entries(SPRITE_URLS).forEach(([key, url]) => {
+  const img = new Image();
+  img.onload = () => {
+    try {
+      spriteCache[key] = stripWhiteBackground(img);
+    } catch {
+      spriteCache[key] = img;
+    }
+  };
+  img.src = url;
+});
+
 // Objetos hospitalares isométricos 2.5D ilustrados (SEM legenda de texto!)
 export function drawRoomObject(ctx, type, cx, cy, tileW, selected = false) {
   ctx.save();
@@ -303,6 +356,13 @@ export function drawRoomObject(ctx, type, cx, cy, tileW, selected = false) {
   ctx.beginPath();
   ctx.ellipse(0, 6, 22, 11, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Se houver sprite ilustrado carregado para este tipo, desenha ele em alta qualidade!
+  if (spriteCache[type]) {
+    ctx.drawImage(spriteCache[type], -30, -48, 60, 60);
+    ctx.restore();
+    return;
+  }
 
   const outline = '#1e293b';
 

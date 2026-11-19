@@ -343,3 +343,29 @@ button:active {
 .hidden {
   display: none !important;
 }
+
+@media (max-width: 640px) {
+  .topbar {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .search-wrap {
+    order: 3;
+    flex: 1 1 100%;
+    max-width: none;
+  }
+  button {
+    font-size: 12px;
+    padding: 8px 10px;
+  }
+  .btn-icon, .btn-hud {
+    width: 38px;
+    height: 38px;
+  }
+  .hud-hint {
+    display: none;
+  }
+  .modal-card {
+    max-height: 92vh;
+  }
+}

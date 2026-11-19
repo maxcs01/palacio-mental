@@ -1029,7 +1029,20 @@ canvas.addEventListener('wheel', (e) => {
   clampCamera();
 }, { passive: false });
 
+const activePointers = new Map();
+let pinchStartDist = null;
+let pinchStartZoom = 1;
+
 canvas.addEventListener('pointerdown', (e) => {
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (activePointers.size === 2 && view.mode === 'city') {
+    const pts = [...activePointers.values()];
+    pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    pinchStartZoom = cam.zoom;
+    cam.dragging = false;
+    cam.moved = true;
+    return;
+  }
   cam.dragging = true;
   cam.moved = false;
   cam.lastX = e.clientX;
@@ -1037,6 +1050,16 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
+  if (activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+  if (activePointers.size === 2 && view.mode === 'city' && pinchStartDist) {
+    const pts = [...activePointers.values()];
+    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    cam.zoom = pinchStartZoom * (dist / pinchStartDist);
+    clampCamera();
+    return;
+  }
   if (!cam.dragging || view.mode !== 'city') return;
   const dx = e.clientX - cam.lastX;
   const dy = e.clientY - cam.lastY;
@@ -1048,7 +1071,15 @@ canvas.addEventListener('pointermove', (e) => {
   clampCamera();
 });
 
+canvas.addEventListener('pointercancel', (e) => {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) pinchStartDist = null;
+  cam.dragging = false;
+});
+
 canvas.addEventListener('pointerup', (e) => {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) pinchStartDist = null;
   const wasClick = !cam.moved;
   cam.dragging = false;
   if (!wasClick) return;
