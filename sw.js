@@ -1,6 +1,6 @@
-const CACHE_NAME = 'palacio-mental-v2';
+const CACHE_NAME = 'palacio-mental-v3';
 
-self.addEventListener('install', (e) => {
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 

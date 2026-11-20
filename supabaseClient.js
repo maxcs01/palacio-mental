@@ -3,7 +3,13 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 const SUPABASE_URL = 'https://eagzlhcnuawbdzjyluxg.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_zj7ON3Z22KRpauwIlcAMqw_x_qkWC8x';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  realtime: {
+    params: {
+      eventsPerSecond: 15
+    }
+  }
+});
 
 export async function getSessionUser() {
   const { data } = await supabase.auth.getUser();
@@ -47,58 +53,200 @@ export async function saveCloudWorld(ownerId, worldData) {
   if (error) throw error;
 }
 
-// Multiplayer estilo Habbo (até 10 pessoas, sem chat) via Supabase Realtime Presence + Broadcast
-export function connectWorldPresence(worldOwnerId, myProfile, onPeersUpdate, onBroadcast) {
-  const channel = supabase.channel(`world:${worldOwnerId}`, {
-    config: { presence: { key: myProfile.id } }
+/**
+ * Multiplayer híbrido (até 10 pessoas, sem chat livre):
+ * - Presence: lista confiável de quem está online (entrada/saída/heartbeat)
+ * - Broadcast: movimentação instantânea, acenos/emotes, chamados e sincronização de edições
+ */
+export function connectWorldPresence(
+  worldOwnerId,
+  myProfile,
+  { onPeersUpdate, onBroadcast, onStatusChange, onSubscribed } = {}
+) {
+  const channelName = `world:${worldOwnerId}`;
+  const channel = supabase.channel(channelName, {
+    config: {
+      presence: { key: myProfile.id },
+      broadcast: { self: false, ack: false }
+    }
   });
 
-  let lastTracked = { ...myProfile };
-  let lastSerialized = JSON.stringify(lastTracked);
+  let myState = { ...myProfile, updatedAt: Date.now() };
+  let lastBroadcastSerialized = '';
+  let lastTrackedModeKey = '';
   let subscribed = false;
+  let closed = false;
 
-  channel.on('presence', { event: 'sync' }, () => {
-    const raw = channel.presenceState();
-    const peers = [];
-    Object.values(raw).forEach((arr) => {
-      if (arr && arr[0]) peers.push(arr[0]);
-    });
-    // Limite máximo de 10 pessoas no mundo
-    onPeersUpdate(peers.slice(0, 10));
-  });
+  // Mapa unificado de colegas (Presence + atualizações ao vivo via Broadcast)
+  const peersMap = new Map();
+  peersMap.set(myProfile.id, { ...myState });
 
-  if (onBroadcast) {
-    channel.on('broadcast', { event: 'world_sync' }, ({ payload }) => {
-      onBroadcast('world_sync', payload);
-    });
-    channel.on('broadcast', { event: 'world_request' }, ({ payload }) => {
-      onBroadcast('world_request', payload);
-    });
+  function emitPeers() {
+    if (!onPeersUpdate) return;
+    const list = Array.from(peersMap.values()).slice(0, 10);
+    onPeersUpdate(list);
   }
 
+  function syncFromPresence() {
+    const raw = channel.presenceState();
+    const presentIds = new Set([myProfile.id]);
+
+    Object.entries(raw).forEach(([key, arr]) => {
+      const meta = Array.isArray(arr) && arr.length > 0 ? arr[arr.length - 1] : null;
+      if (!meta) return;
+      const id = meta.id || key;
+      presentIds.add(id);
+      const prev = peersMap.get(id);
+      // Preserva posição mais recente vinda via broadcast se for mais nova
+      if (prev && (prev.updatedAt || 0) > (meta.updatedAt || 0)) {
+        peersMap.set(id, { ...meta, ...prev, name: meta.name || prev.name, color: meta.color || prev.color });
+      } else {
+        peersMap.set(id, { ...meta, id });
+      }
+    });
+
+    // Remove quem desconectou (mas mantém colegas recentes via broadcast por até 12s contra flicker)
+    const now = Date.now();
+    for (const [id, peer] of peersMap.entries()) {
+      if (!presentIds.has(id) && now - (peer.lastSeen || peer.updatedAt || 0) > 12000) {
+        peersMap.delete(id);
+      }
+    }
+    emitPeers();
+  }
+
+  channel.on('presence', { event: 'sync' }, syncFromPresence);
+
+  channel.on('presence', { event: 'join' }, ({ newPresences }) => {
+    syncFromPresence();
+    // Quando um colega entra, reenvia nossa posição atual para ele nos ver na hora
+    if (subscribed) {
+      channel.send({ type: 'broadcast', event: 'peer_state', payload: myState }).catch(() => {});
+    }
+    if (onBroadcast && Array.isArray(newPresences)) {
+      newPresences.forEach((p) => {
+        if (p?.id && p.id !== myProfile.id) {
+          onBroadcast('peer_join', p);
+        }
+      });
+    }
+  });
+
+  channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+    if (Array.isArray(leftPresences)) {
+      leftPresences.forEach((p) => {
+        if (p?.id && p.id !== myProfile.id) {
+          peersMap.delete(p.id);
+          if (onBroadcast) onBroadcast('peer_leave', p);
+        }
+      });
+    }
+    syncFromPresence();
+  });
+
+  // Broadcast instantâneo de posição/estado
+  channel.on('broadcast', { event: 'peer_state' }, ({ payload }) => {
+    if (!payload || !payload.id || payload.id === myProfile.id) return;
+    const prev = peersMap.get(payload.id) || {};
+    peersMap.set(payload.id, {
+      ...prev,
+      ...payload,
+      lastSeen: Date.now()
+    });
+    emitPeers();
+  });
+
+  // Emotes, chamados e interações diretas
+  ['peer_emote', 'peer_ping', 'world_sync', 'world_request'].forEach((evt) => {
+    channel.on('broadcast', { event: evt }, ({ payload }) => {
+      if (evt === 'peer_emote' && payload?.id && payload.id !== myProfile.id) {
+        const prev = peersMap.get(payload.id) || { id: payload.id };
+        peersMap.set(payload.id, {
+          ...prev,
+          name: payload.name || prev.name,
+          color: payload.color || prev.color,
+          emote: payload.emote || '',
+          lastSeen: Date.now()
+        });
+        emitPeers();
+      }
+      if (onBroadcast) onBroadcast(evt, payload);
+    });
+  });
+
+  // Heartbeat leve a cada 4s para manter presence + posição sincronizados
+  const heartbeat = setInterval(() => {
+    if (closed || !subscribed) return;
+    myState.updatedAt = Date.now();
+    channel.send({ type: 'broadcast', event: 'peer_state', payload: myState }).catch(() => {});
+  }, 4000);
+
+  if (onStatusChange) onStatusChange('connecting');
+
   channel.subscribe(async (status) => {
+    if (closed) return;
     if (status === 'SUBSCRIBED') {
       subscribed = true;
-      await channel.track(lastTracked);
+      if (onStatusChange) onStatusChange('connected');
+      myState.updatedAt = Date.now();
+      try {
+        await channel.track(myState);
+      } catch (e) {
+        console.warn('Falha no track inicial:', e);
+      }
+      channel.send({ type: 'broadcast', event: 'peer_state', payload: myState }).catch(() => {});
+      if (onSubscribed) onSubscribed();
+    } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+      subscribed = false;
+      if (onStatusChange) onStatusChange('error');
     }
   });
 
   return {
-    updatePosition(pos) {
-      const next = { ...lastTracked, ...pos };
-      const serialized = JSON.stringify(next);
-      if (serialized === lastSerialized) return;
-      lastTracked = next;
-      lastSerialized = serialized;
-      if (subscribed) {
-        channel.track(lastTracked).catch(() => {});
+    updatePosition(patch, forceTrack = false) {
+      myState = { ...myState, ...patch, updatedAt: Date.now() };
+      peersMap.set(myProfile.id, { ...myState });
+
+      const broadcastPayload = {
+        id: myState.id,
+        name: myState.name,
+        color: myState.color,
+        x: myState.x,
+        y: myState.y,
+        mode: myState.mode,
+        buildingId: myState.buildingId,
+        roomId: myState.roomId,
+        rgx: myState.rgx,
+        rgy: myState.rgy,
+        emote: myState.emote || '',
+        updatedAt: myState.updatedAt
+      };
+      const serialized = JSON.stringify({ ...broadcastPayload, updatedAt: 0 });
+      const modeKey = `${myState.name}|${myState.color}|${myState.mode}|${myState.buildingId}|${myState.roomId}`;
+
+      if (!subscribed) return;
+
+      if (serialized !== lastBroadcastSerialized || forceTrack) {
+        lastBroadcastSerialized = serialized;
+        channel.send({ type: 'broadcast', event: 'peer_state', payload: broadcastPayload }).catch(() => {});
+      }
+
+      // Atualiza presence apenas quando muda de local/perfil ou forçado (evita throttle do Presence)
+      if (forceTrack || modeKey !== lastTrackedModeKey) {
+        lastTrackedModeKey = modeKey;
+        channel.track(broadcastPayload).catch(() => {});
       }
     },
     broadcast(event, payload) {
       if (!subscribed) return;
       channel.send({ type: 'broadcast', event, payload }).catch(() => {});
     },
+    isSubscribed() {
+      return subscribed;
+    },
     leave() {
+      closed = true;
+      clearInterval(heartbeat);
       supabase.removeChannel(channel);
     }
   };

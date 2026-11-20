@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f172a" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <title>Cidade Palácio Mental — Protótipo</title>
+  <title>Cidade Palácio Mental</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -23,7 +23,7 @@
       </div>
 
       <div class="topbar-actions">
-        <button id="btnFriends" class="btn-secondary" title="Compartilhar mundo (até 10 pessoas)">👥 Amigos</button>
+        <button id="btnFriends" class="btn-secondary" title="Compartilhar mundo e ver colegas online">👥 Amigos</button>
         <button id="btnAccount" class="btn-secondary" title="Entrar / Sincronizar na nuvem">☁️ Nuvem</button>
         <button id="btnDayNight" class="btn-icon" title="Alternar Dia / Noite">☀️</button>
         <button id="btnMusic" class="btn-icon" title="Música ambiente">🎵</button>
@@ -36,6 +36,24 @@
     <main class="stage">
       <canvas id="gameCanvas"></canvas>
 
+      <!-- Notificações flutuantes (multiplayer / avisos) -->
+      <div id="toastStack" class="toast-stack"></div>
+
+      <!-- Barra de colegas online (aparece quando há colegas no mesmo mundo) -->
+      <div id="onlineBar" class="online-bar hidden">
+        <div class="online-bar-head">
+          <span class="online-dot"></span>
+          <span id="onlineBarTitle">Online agora</span>
+        </div>
+        <div id="onlinePeersStrip" class="online-peers-strip"></div>
+        <div class="online-emotes-strip">
+          <button class="emote-chip" data-quick-emote="👋" title="Acenar">👋</button>
+          <button class="emote-chip" data-quick-emote="💡" title="Entendi!">💡</button>
+          <button class="emote-chip" data-quick-emote="🔥" title="Foco total!">🔥</button>
+          <button class="emote-chip" data-quick-emote="📣 Vem cá!" title="Chamar colegas">📣</button>
+        </div>
+      </div>
+
       <!-- Controles flutuantes da Cidade -->
       <div id="cityHud" class="hud-bottom">
         <div class="hud-group">
@@ -44,7 +62,7 @@
           <button id="btnNewBuilding" class="btn-primary">+ Novo Prédio</button>
         </div>
         <div class="hud-hint" id="cityHint">
-          WASD/Setas ou toque para andar • Clique num prédio para entrar • Scroll/botões para Zoom
+          WASD/Setas ou toque para andar • Clique num prédio para entrar • Scroll/pinça para Zoom
         </div>
       </div>
 
@@ -53,21 +71,90 @@
         <div class="hud-group">
           <button id="btnOpenIndex" class="btn-primary">📋 Índice dos Andares</button>
           <button id="btnDecayConfig" class="btn-secondary">⚙️ Prazo de Desgaste</button>
+          <span class="hud-sep"></span>
+          <button class="btn-hud inner-zoom-out" title="Afastar">－</button>
+          <button class="btn-hud inner-zoom-reset" title="Centralizar">⌖</button>
+          <button class="btn-hud inner-zoom-in" title="Aproximar">＋</button>
         </div>
         <div class="hud-hint">Clique no Quadro na parede para abrir os andares e apartamentos</div>
       </div>
 
-      <!-- Barra de Edição dentro do Cômodo -->
+      <!-- Barra de Estudo dentro do Cômodo (quando Modo Edição está OFF) -->
       <div id="roomHud" class="hud-bottom hidden">
         <div class="hud-group">
-          <button id="btnToggleEdit" class="btn-secondary">✏️ Modo Edição: OFF</button>
-          <button id="btnRoomRonda" class="btn-primary">🩺 Concluir Ronda do Cômodo</button>
+          <button id="btnToggleEdit" class="btn-secondary">✏️ Editar Quarto</button>
+          <button id="btnRoomRonda" class="btn-primary">🩺 Concluir Ronda</button>
+          <span class="hud-sep"></span>
+          <button class="btn-hud inner-zoom-out" title="Afastar">－</button>
+          <button class="btn-hud inner-zoom-reset" title="Centralizar">⌖</button>
+          <button class="btn-hud inner-zoom-in" title="Aproximar">＋</button>
         </div>
-        <div id="objectPalette" class="palette hidden"></div>
+        <div class="hud-hint" id="roomHint">
+          Toque num objeto para revisar • Clique no piso ou use WASD para andar • Pinça/scroll para aproximar
+        </div>
       </div>
+
+      <!-- Banner flutuante superior do Modo Edição -->
+      <div id="editBanner" class="edit-banner hidden">
+        <span class="edit-banner-dot"></span>
+        <span id="editBannerText">Modo Edição: toque num ladrilho vazio para adicionar ou num objeto para editar</span>
+        <button id="btnExitEditTop" class="btn-success btn-sm">✓ Concluir</button>
+      </div>
+
+      <!-- Estúdio de Edição de Quarto (lateral no PC, painel inferior recolhível no celular) -->
+      <aside id="roomEditorPanel" class="editor-panel hidden" aria-label="Editor do Quarto">
+        <div class="editor-header">
+          <div>
+            <div class="editor-title">✨ Estúdio do Quarto</div>
+            <div id="editorRoomMeta" class="editor-subtitle">0 objetos</div>
+          </div>
+          <div class="editor-header-actions">
+            <button id="btnToggleDrawer" class="btn-icon btn-sm mobile-only" title="Recolher / Expandir">▾</button>
+            <button id="btnCloseEdit" class="btn-success btn-sm">✓ Pronto</button>
+          </div>
+        </div>
+
+        <div class="editor-tabs" role="tablist">
+          <button class="editor-tab active" data-editor-tab="add">➕ Móveis</button>
+          <button class="editor-tab" data-editor-tab="move">✋ Mover</button>
+          <button class="editor-tab" data-editor-tab="style">🎨 Quarto</button>
+        </div>
+
+        <div class="editor-body">
+          <!-- Aba 1: Catálogo visual com miniaturas -->
+          <div id="tabAdd" class="editor-pane">
+            <p class="editor-tip">Escolha um objeto abaixo e toque em um espaço livre do piso para posicionar:</p>
+            <div id="objectPalette" class="catalog-grid"></div>
+          </div>
+
+          <!-- Aba 2: Mover objeto -->
+          <div id="tabMove" class="editor-pane hidden">
+            <div id="moveStatusBox" class="move-status-box">
+              <strong>1. Toque no objeto</strong> que você quer mudar de lugar.<br />
+              <span>Depois toque no ladrilho livre de destino.</span>
+            </div>
+            <button id="btnCancelMove" class="btn-secondary hidden" style="width:100%;margin-top:8px;">Cancelar seleção</button>
+          </div>
+
+          <!-- Aba 3: Tema visual do quarto + Lista de objetos -->
+          <div id="tabStyle" class="editor-pane hidden">
+            <div class="editor-section-label">Textura & Estilo do Quarto</div>
+            <div id="themeGrid" class="theme-grid"></div>
+
+            <div class="editor-section-label" style="margin-top:14px;">Nome do Cômodo</div>
+            <div class="inline-rename">
+              <input id="inpRenameRoom" type="text" placeholder="Nome do cômodo" />
+              <button id="btnRenameRoom" class="btn-primary btn-sm">Salvar</button>
+            </div>
+
+            <div class="editor-section-label" style="margin-top:14px;">Objetos neste Quarto</div>
+            <div id="roomObjectsList" class="room-objects-list"></div>
+          </div>
+        </div>
+      </aside>
     </main>
 
-    <!-- Painel lateral / Modal para Recepção, Andar, Objeto ou Bibliografia -->
+    <!-- Modal -->
     <div id="modalBackdrop" class="modal-backdrop hidden">
       <div class="modal-card" role="dialog" aria-modal="true">
         <div class="modal-header">

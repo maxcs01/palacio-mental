@@ -1,5 +1,6 @@
 import {
   OBJECT_CATALOG,
+  ROOM_THEMES,
   CITY_LOTS,
   DEFAULT_CLINICAL_ROOMS,
   loadState,
@@ -14,7 +15,9 @@ import {
   drawTree,
   drawAvatar,
   drawCar,
-  drawRoomObject
+  drawRoomObject,
+  drawIllustratedRoomShell,
+  getRoomTheme
 } from './sprites.js';
 import { ambientMusic } from './audio.js';
 import {
@@ -30,6 +33,11 @@ import { saveLocalPdf, buildPdfViewerElement } from './pdfViewer.js';
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+
+// Dimensões lógicas do canvas (CSS px) + DPR para nitidez HD
+let canvasCssW = 800;
+let canvasCssH = 600;
+let dpr = Math.min(window.devicePixelRatio || 1, 2);
 
 // Dimensões fixas do mundo (24x16 tiles de 48px = 1152x768)
 const TILE = 48;
@@ -71,14 +79,14 @@ function resetInnerCam() {
 }
 
 function clampInnerCam() {
-  innerCam.zoom = Math.max(0.75, Math.min(2.8, innerCam.zoom));
-  innerCam.x = Math.max(-240, Math.min(240, innerCam.x));
-  innerCam.y = Math.max(-200, Math.min(200, innerCam.y));
+  innerCam.zoom = Math.max(0.65, Math.min(3.2, innerCam.zoom));
+  innerCam.x = Math.max(-360, Math.min(360, innerCam.x));
+  innerCam.y = Math.max(-280, Math.min(280, innerCam.y));
 }
 
 // Jogador e entidades vivas
-const player = { x: 12 * TILE, y: 9.5 * TILE, targetX: null, targetY: null, speed: 150 };
-const roomPlayer = { gx: 3.5, gy: 4.5, targetGx: null, targetGy: null, speed: 3.2 };
+const player = { x: 12 * TILE, y: 9.5 * TILE, targetX: null, targetY: null, speed: 155 };
+const roomPlayer = { gx: 3.5, gy: 4.5, targetGx: null, targetGy: null, speed: 3.3 };
 const keys = {};
 
 const cars = [
@@ -90,7 +98,7 @@ const cars = [
 const pedestrians = [
   { x: 9 * TILE, y: 7.4 * TILE, vx: 22, minX: 7 * TILE, maxX: 14 * TILE, shirt: '#f472b6' },
   { x: 15 * TILE, y: 10.3 * TILE, vx: -18, minX: 10 * TILE, maxX: 17 * TILE, shirt: '#facc15' },
-  { x: 11.2 * TILE, y: 9.2 * TILE, vx: 0, shirt: '#34d399' }, // conversando na praça
+  { x: 11.2 * TILE, y: 9.2 * TILE, vx: 0, shirt: '#34d399' },
   { x: 11.7 * TILE, y: 9.2 * TILE, vx: 0, shirt: '#fb923c' }
 ];
 
@@ -101,98 +109,38 @@ const ducks = [
 
 let trafficLightGreen = true;
 let trafficTimer = 0;
-let editMode = false;
-let selectedPaletteType = OBJECT_CATALOG[0].id;
 
-// Multiplayer estilo Habbo (até 10 pessoas)
+// Estado do Estúdio de Edição de Quartos
+let editMode = false;
+let editorTab = 'add'; // 'add' | 'move' | 'style'
+let selectedPaletteType = OBJECT_CATALOG[0].id;
+let movingObjectId = null;
+let hoveredRoomTile = null; // { gx, gy, occupied }
+
+// ---------------- MULTIPLAYER ESTILO HABBO (ATÉ 10 PESSOAS) ----------------
 const urlParams = new URLSearchParams(window.location.search);
 const sharedWorldOwnerId = urlParams.get('world');
 const sharedRole = sharedWorldOwnerId ? (urlParams.get('role') === 'editor' ? 'editor' : 'viewer') : 'owner';
+
+function getOrCreateLocalWorldId() {
+  let id = localStorage.getItem('palacio_guest_world_v1');
+  if (!id) {
+    id = `sala-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('palacio_guest_world_v1', id);
+  }
+  return id;
+}
+
 const myPeerId = `peer-${Math.random().toString(36).slice(2, 8)}`;
 let myAvatar = JSON.parse(localStorage.getItem('palacio_avatar_v1') || '{"name":"Você","color":"#38bdf8"}');
 let remotePeers = [];
+const peerSmoothPos = new Map(); // interpolação suave dos avatares remotos
 let presenceConn = null;
+let connectedWorldId = null;
+let multiplayerStatus = 'offline'; // 'offline' | 'connecting' | 'connected' | 'error'
 let lastPresenceSent = 0;
 let myEmote = '';
 let myEmoteTimer = null;
-
-function triggerEmote(text) {
-  myEmote = text;
-  if (myEmoteTimer) clearTimeout(myEmoteTimer);
-  if (presenceConn) {
-    presenceConn.updatePosition({ emote: myEmote });
-  }
-  myEmoteTimer = setTimeout(() => {
-    myEmote = '';
-    if (presenceConn) presenceConn.updatePosition({ emote: '' });
-  }, 4000);
-}
-
-function formatPeerLocation(peer) {
-  if (!peer) return 'Na cidade';
-  if (peer.mode === 'city' || !peer.mode) return 'Na cidade';
-  const b = state.buildings.find((x) => x.id === peer.buildingId);
-  if (peer.mode === 'reception') return b ? `Recepção • ${b.name}` : 'Na recepção';
-  if (peer.mode === 'room' && b) {
-    for (const f of b.floors) {
-      for (const ap of f.apartments) {
-        const rm = ap.rooms.find((r) => r.id === peer.roomId);
-        if (rm) return `${b.name} → ${ap.name} → ${rm.name}`;
-      }
-    }
-    return `Em ${b.name}`;
-  }
-  return 'Estudando';
-}
-
-function goToPeer(peer) {
-  if (!peer) return;
-  if (peer.mode === 'reception' && peer.buildingId) {
-    enterBuilding(peer.buildingId);
-  } else if (peer.mode === 'room' && peer.buildingId && peer.roomId) {
-    const b = state.buildings.find((x) => x.id === peer.buildingId);
-    if (b) {
-      for (const f of b.floors) {
-        for (const ap of f.apartments) {
-          const rm = ap.rooms.find((r) => r.id === peer.roomId);
-          if (rm) {
-            enterRoom(b.id, f.id, ap.id, rm.id);
-            roomPlayer.gx = typeof peer.rgx === 'number' ? Math.max(0.5, peer.rgx - 0.6) : 3.5;
-            roomPlayer.gy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
-            return;
-          }
-        }
-      }
-    }
-  } else {
-    goHome();
-    if (typeof peer.x === 'number' && typeof peer.y === 'number') {
-      player.targetX = peer.x + 22;
-      player.targetY = peer.y;
-    }
-  }
-}
-
-function openPeerModal(peer) {
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-    <div class="card-box">
-      <p><strong>${peer.name || 'Amigo'}</strong></p>
-      <p style="font-size:13px;color:var(--muted)">📍 ${formatPeerLocation(peer)}</p>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
-        <button class="btn-primary" id="btnPeerGo">📍 Ir até ${peer.name || 'amigo'}</button>
-        <button class="btn-ghost" id="btnPeerWave">👋 Acenar</button>
-        <button class="btn-ghost" id="btnPeerIdea">💡 Entendi!</button>
-        <button class="btn-ghost" id="btnPeerCome">📣 Vem pra cá!</button>
-      </div>
-    </div>
-  `;
-  openModal('👤 Colega de Estudo', wrap);
-  document.getElementById('btnPeerGo').onclick = () => { closeModal(); goToPeer(peer); };
-  document.getElementById('btnPeerWave').onclick = () => { triggerEmote('👋'); closeModal(); };
-  document.getElementById('btnPeerIdea').onclick = () => { triggerEmote('💡'); closeModal(); };
-  document.getElementById('btnPeerCome').onclick = () => { triggerEmote('📣 Vem cá!'); closeModal(); };
-}
 
 // Elementos de UI
 const breadcrumbEl = document.getElementById('breadcrumb');
@@ -213,8 +161,241 @@ const modalTitle = document.getElementById('modalTitle');
 const modalBody = document.getElementById('modalBody');
 const searchInput = document.getElementById('searchInput');
 const searchResults = document.getElementById('searchResults');
+const toastStack = document.getElementById('toastStack');
+const onlineBar = document.getElementById('onlineBar');
+const onlineBarTitle = document.getElementById('onlineBarTitle');
+const onlinePeersStrip = document.getElementById('onlinePeersStrip');
+
+// Elementos do Estúdio de Edição
+const editBanner = document.getElementById('editBanner');
+const editBannerText = document.getElementById('editBannerText');
+const btnExitEditTop = document.getElementById('btnExitEditTop');
+const roomEditorPanel = document.getElementById('roomEditorPanel');
+const editorRoomMeta = document.getElementById('editorRoomMeta');
+const btnCloseEdit = document.getElementById('btnCloseEdit');
+const btnToggleDrawer = document.getElementById('btnToggleDrawer');
+const tabAdd = document.getElementById('tabAdd');
+const tabMove = document.getElementById('tabMove');
+const tabStyle = document.getElementById('tabStyle');
+const moveStatusBox = document.getElementById('moveStatusBox');
+const btnCancelMove = document.getElementById('btnCancelMove');
+const themeGrid = document.getElementById('themeGrid');
+const inpRenameRoom = document.getElementById('inpRenameRoom');
+const btnRenameRoom = document.getElementById('btnRenameRoom');
+const roomObjectsList = document.getElementById('roomObjectsList');
+
+// ---------------- TOASTS & INTERAÇÕES MULTIPLAYER ----------------
+function showToast(message, actionLabel = '', onAction = null, durationMs = 4800) {
+  const item = document.createElement('div');
+  item.className = 'toast-item';
+  const span = document.createElement('span');
+  span.textContent = message;
+  item.appendChild(span);
+
+  if (actionLabel && onAction) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-primary btn-sm';
+    btn.textContent = actionLabel;
+    btn.onclick = () => {
+      item.remove();
+      onAction();
+    };
+    item.appendChild(btn);
+  }
+
+  toastStack.appendChild(item);
+  setTimeout(() => {
+    item.remove();
+  }, durationMs);
+}
+
+function getMyLocationPayload() {
+  return {
+    id: myPeerId,
+    name: myAvatar.name,
+    color: myAvatar.color,
+    x: Math.round(player.x),
+    y: Math.round(player.y),
+    mode: view.mode,
+    buildingId: view.buildingId,
+    roomId: view.roomId,
+    rgx: Number(roomPlayer.gx.toFixed(2)),
+    rgy: Number(roomPlayer.gy.toFixed(2)),
+    emote: myEmote
+  };
+}
+
+function pushMyPresenceNow(forceTrack = false) {
+  if (!presenceConn) return;
+  presenceConn.updatePosition(getMyLocationPayload(), forceTrack);
+}
+
+function triggerEmote(text, targetPeerId = null) {
+  myEmote = text;
+  if (myEmoteTimer) clearTimeout(myEmoteTimer);
+  if (presenceConn) {
+    presenceConn.updatePosition({ emote: myEmote });
+    presenceConn.broadcast('peer_emote', {
+      id: myPeerId,
+      name: myAvatar.name,
+      color: myAvatar.color,
+      emote: myEmote,
+      targetPeerId,
+      location: getMyLocationPayload()
+    });
+  }
+  myEmoteTimer = setTimeout(() => {
+    myEmote = '';
+    if (presenceConn) {
+      presenceConn.updatePosition({ emote: '' });
+      presenceConn.broadcast('peer_emote', { id: myPeerId, emote: '' });
+    }
+  }, 4500);
+}
+
+function callPeerHere(peer) {
+  if (!presenceConn) return;
+  triggerEmote('📣 Vem cá!', peer.id);
+  presenceConn.broadcast('peer_ping', {
+    fromId: myPeerId,
+    fromName: myAvatar.name,
+    targetId: peer.id,
+    location: getMyLocationPayload()
+  });
+  showToast(`📣 Chamado enviado para ${peer.name || 'colega'}!`);
+}
+
+function formatPeerLocation(peer) {
+  if (!peer) return 'Na cidade';
+  if (peer.mode === 'city' || !peer.mode) return 'Na cidade';
+  const b = state.buildings.find((x) => x.id === peer.buildingId);
+  if (peer.mode === 'reception') return b ? `Recepção • ${b.name}` : 'Na recepção';
+  if (peer.mode === 'room' && b) {
+    for (const f of b.floors) {
+      for (const ap of f.apartments) {
+        const rm = ap.rooms.find((r) => r.id === peer.roomId);
+        if (rm) return `${b.name} → ${rm.name}`;
+      }
+    }
+    return `Em ${b.name}`;
+  }
+  return 'Estudando';
+}
+
+function goHome() {
+  setEditMode(false);
+  view = { mode: 'city', buildingId: null, floorId: null, apartmentId: null, roomId: null };
+  updateTopbar();
+  pushMyPresenceNow(true);
+}
+
+function goToPeer(peer) {
+  if (!peer) return;
+  if (peer.mode === 'reception' && peer.buildingId) {
+    enterBuilding(peer.buildingId);
+  } else if (peer.mode === 'room' && peer.buildingId && peer.roomId) {
+    const b = state.buildings.find((x) => x.id === peer.buildingId);
+    if (b) {
+      for (const f of b.floors) {
+        for (const ap of f.apartments) {
+          const rm = ap.rooms.find((r) => r.id === peer.roomId);
+          if (rm) {
+            enterRoom(b.id, f.id, ap.id, rm.id);
+            roomPlayer.gx = typeof peer.rgx === 'number' ? Math.max(0.6, peer.rgx - 0.7) : 3.5;
+            roomPlayer.gy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
+            pushMyPresenceNow(true);
+            return;
+          }
+        }
+      }
+    }
+    showToast('O quarto desse colega ainda está sincronizando...');
+  } else {
+    goHome();
+    if (typeof peer.x === 'number' && typeof peer.y === 'number') {
+      player.targetX = Math.min(WORLD_W - TILE, peer.x + 26);
+      player.targetY = peer.y;
+      cam.x = peer.x;
+      cam.y = peer.y;
+      clampCamera();
+    }
+  }
+}
+
+function renderOnlineBar() {
+  const others = remotePeers.filter((p) => p.id !== myPeerId);
+  const totalOnline = others.length + 1;
+  const dot = multiplayerStatus === 'connected' ? '🟢' : multiplayerStatus === 'connecting' ? '🟡' : '👥';
+  btnFriends.textContent = others.length > 0 ? `${dot} Amigos (${totalOnline}/10)` : '👥 Amigos';
+
+  if (others.length === 0) {
+    onlineBar.classList.add('hidden');
+    return;
+  }
+
+  onlineBar.classList.remove('hidden');
+  onlineBarTitle.textContent = `${others.length} colega${others.length > 1 ? 's' : ''} online`;
+  onlinePeersStrip.innerHTML = '';
+
+  others.slice(0, 5).forEach((p) => {
+    const btn = document.createElement('button');
+    btn.className = 'peer-chip';
+    btn.innerHTML = `
+      <span class="peer-chip-info">
+        <span class="peer-color-dot" style="background:${p.color || '#f43f5e'}"></span>
+        <span>
+          <strong>${escapeHtml(p.name || 'Amigo')}</strong>
+          <span class="peer-chip-loc">📍 ${escapeHtml(formatPeerLocation(p))}</span>
+        </span>
+      </span>
+      <span style="font-size:11px;color:var(--accent)">Interagir</span>
+    `;
+    btn.onclick = () => openPeerModal(p);
+    onlinePeersStrip.appendChild(btn);
+  });
+}
+
+function openPeerModal(peer) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="card-box">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="peer-color-dot" style="width:16px;height:16px;background:${peer.color || '#f43f5e'}"></span>
+        <div>
+          <strong>${escapeHtml(peer.name || 'Amigo')}</strong>
+          <div style="font-size:12px;color:var(--muted)">📍 ${escapeHtml(formatPeerLocation(peer))}</div>
+        </div>
+      </div>
+      <div class="row-actions" style="margin-top:6px;">
+        <button class="btn-primary" id="btnPeerGo">📍 Ir até ${escapeHtml(peer.name || 'colega')}</button>
+        <button class="btn-secondary" id="btnPeerCall">📣 Chamar para cá</button>
+      </div>
+      <div class="row-actions">
+        <button class="btn-ghost" id="btnPeerWave">👋 Acenar</button>
+        <button class="btn-ghost" id="btnPeerIdea">💡 Entendi!</button>
+        <button class="btn-ghost" id="btnPeerFire">🔥 Foco!</button>
+        <button class="btn-ghost" id="btnPeerClap">👏 Boa revisão!</button>
+      </div>
+    </div>
+  `;
+  openModal('👤 Colega de Estudo', wrap);
+  document.getElementById('btnPeerGo').onclick = () => { closeModal(); goToPeer(peer); };
+  document.getElementById('btnPeerCall').onclick = () => { callPeerHere(peer); closeModal(); };
+  document.getElementById('btnPeerWave').onclick = () => { triggerEmote('👋', peer.id); closeModal(); };
+  document.getElementById('btnPeerIdea').onclick = () => { triggerEmote('💡 Entendi!', peer.id); closeModal(); };
+  document.getElementById('btnPeerFire').onclick = () => { triggerEmote('🔥 Foco!', peer.id); closeModal(); };
+  document.getElementById('btnPeerClap').onclick = () => { triggerEmote('👏 Boa!', peer.id); closeModal(); };
+}
 
 // ---------------- UTILIDADES ----------------
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -240,21 +421,23 @@ function getCurrentRoom() {
 
 function resizeCanvas() {
   const rect = canvas.parentElement.getBoundingClientRect();
-  canvas.width = Math.max(320, Math.floor(rect.width));
-  canvas.height = Math.max(240, Math.floor(rect.height));
+  canvasCssW = Math.max(320, Math.floor(rect.width));
+  canvasCssH = Math.max(240, Math.floor(rect.height));
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(canvasCssW * dpr);
+  canvas.height = Math.round(canvasCssH * dpr);
   clampCamera();
 }
 
 function getMinZoom() {
-  // Garante que nunca apareça tela preta fora dos limites naturais do mundo
-  return Math.max(canvas.width / WORLD_W, canvas.height / WORLD_H, 0.55);
+  return Math.max(canvasCssW / WORLD_W, canvasCssH / WORLD_H, 0.55);
 }
 
 function clampCamera() {
   const minZ = getMinZoom();
-  cam.zoom = Math.max(minZ, Math.min(2.4, cam.zoom));
-  const halfW = canvas.width / (2 * cam.zoom);
-  const halfH = canvas.height / (2 * cam.zoom);
+  cam.zoom = Math.max(minZ, Math.min(2.6, cam.zoom));
+  const halfW = canvasCssW / (2 * cam.zoom);
+  const halfH = canvasCssH / (2 * cam.zoom);
   cam.x = Math.max(halfW, Math.min(WORLD_W - halfW, cam.x));
   cam.y = Math.max(halfH, Math.min(WORLD_H - halfH, cam.y));
 }
@@ -264,8 +447,8 @@ function screenToWorld(sx, sy) {
   const cx = sx - rect.left;
   const cy = sy - rect.top;
   return {
-    x: cam.x + (cx - canvas.width / 2) / cam.zoom,
-    y: cam.y + (cy - canvas.height / 2) / cam.zoom
+    x: cam.x + (cx - canvasCssW / 2) / cam.zoom,
+    y: cam.y + (cy - canvasCssH / 2) / cam.zoom
   };
 }
 
@@ -278,6 +461,8 @@ function updateTopbar() {
     cityHud.classList.remove('hidden');
     receptionHud.classList.add('hidden');
     roomHud.classList.add('hidden');
+    editBanner.classList.add('hidden');
+    roomEditorPanel.classList.add('hidden');
   } else if (view.mode === 'reception') {
     const b = getCurrentBuilding();
     breadcrumbEl.textContent = `Cidade → ${b ? b.name : ''} (Recepção)`;
@@ -286,6 +471,8 @@ function updateTopbar() {
     cityHud.classList.add('hidden');
     receptionHud.classList.remove('hidden');
     roomHud.classList.add('hidden');
+    editBanner.classList.add('hidden');
+    roomEditorPanel.classList.add('hidden');
   } else if (view.mode === 'room') {
     const b = getCurrentBuilding();
     const a = getCurrentApartment();
@@ -295,7 +482,10 @@ function updateTopbar() {
     btnRonda.classList.add('hidden');
     cityHud.classList.add('hidden');
     receptionHud.classList.add('hidden');
-    roomHud.classList.remove('hidden');
+    roomHud.classList.toggle('hidden', editMode);
+    editBanner.classList.toggle('hidden', !editMode);
+    roomEditorPanel.classList.toggle('hidden', !editMode);
+    if (editMode) refreshEditorPanel();
   }
 }
 
@@ -314,18 +504,141 @@ function closeModal() {
   modalBackdrop.classList.add('hidden');
 }
 
+// ---------------- ESTÚDIO DE EDIÇÃO DO QUARTO ----------------
+function setEditMode(on) {
+  if (on && sharedRole === 'viewer') {
+    showToast('Você entrou como Visitante neste mundo (somente leitura).');
+    return;
+  }
+  editMode = Boolean(on);
+  movingObjectId = null;
+  hoveredRoomTile = null;
+  if (editMode) {
+    roomEditorPanel.classList.remove('collapsed');
+    btnToggleDrawer.textContent = '▾';
+  }
+  updateTopbar();
+  updateEditorBanner();
+}
+
+function setEditorTab(tab) {
+  editorTab = tab;
+  movingObjectId = null;
+  document.querySelectorAll('.editor-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.editorTab === tab);
+  });
+  tabAdd.classList.toggle('hidden', tab !== 'add');
+  tabMove.classList.toggle('hidden', tab !== 'move');
+  tabStyle.classList.toggle('hidden', tab !== 'style');
+  refreshEditorPanel();
+  updateEditorBanner();
+}
+
+function updateEditorBanner() {
+  if (!editMode) return;
+  if (editorTab === 'add') {
+    const cat = OBJECT_CATALOG.find((c) => c.id === selectedPaletteType);
+    editBannerText.textContent = `Adicionar "${cat?.shortName || 'Móvel'}": toque num espaço livre • ou toque num objeto para editar`;
+  } else if (editorTab === 'move') {
+    const room = getCurrentRoom();
+    const obj = room?.objects.find((o) => o.id === movingObjectId);
+    if (obj) {
+      editBannerText.textContent = `Movendo "${obj.title || 'Objeto'}": toque no novo ladrilho livre`;
+    } else {
+      editBannerText.textContent = 'Mover: toque primeiro no objeto que deseja mudar de lugar';
+    }
+  } else {
+    editBannerText.textContent = 'Estilo do Quarto: personalize a textura do ambiente ou gerencie os objetos';
+  }
+}
+
+function refreshEditorPanel() {
+  const room = getCurrentRoom();
+  if (!room) return;
+
+  const count = room.objects.length;
+  editorRoomMeta.textContent = `${room.name} • ${count} objeto${count === 1 ? '' : 's'}`;
+
+  // Atualiza status da aba Mover
+  const movingObj = room.objects.find((o) => o.id === movingObjectId);
+  if (movingObj) {
+    moveStatusBox.innerHTML = `<strong>Selecionado: ${escapeHtml(movingObj.title || 'Objeto')}</strong><br /><span>Agora toque em qualquer ladrilho livre no quarto para reposicionar.</span>`;
+    btnCancelMove.classList.remove('hidden');
+  } else {
+    moveStatusBox.innerHTML = `<strong>1. Toque no objeto</strong> que você quer mudar de lugar.<br /><span>Depois toque no ladrilho livre de destino.</span>`;
+    btnCancelMove.classList.add('hidden');
+  }
+
+  // Atualiza temas visuais
+  const currentTheme = room.theme || 'clinic';
+  themeGrid.innerHTML = '';
+  ROOM_THEMES.forEach((th) => {
+    const card = document.createElement('button');
+    card.className = `theme-card ${th.id === currentTheme ? 'active' : ''}`;
+    card.innerHTML = `
+      <div class="theme-swatches">
+        ${th.swatch.map((c) => `<span class="theme-swatch-dot" style="background:${c}"></span>`).join('')}
+      </div>
+      <strong>${th.name}</strong>
+      <small>${th.desc}</small>
+    `;
+    card.onclick = () => {
+      room.theme = th.id;
+      persistState();
+      refreshEditorPanel();
+    };
+    themeGrid.appendChild(card);
+  });
+
+  // Atualiza input de renomear
+  if (document.activeElement !== inpRenameRoom) {
+    inpRenameRoom.value = room.name || '';
+  }
+
+  // Atualiza lista de objetos do quarto
+  roomObjectsList.innerHTML = '';
+  if (room.objects.length === 0) {
+    roomObjectsList.innerHTML = '<p class="editor-tip">Nenhum objeto neste quarto ainda. Use a aba ➕ Móveis!</p>';
+  } else {
+    room.objects.forEach((obj) => {
+      const cat = OBJECT_CATALOG.find((c) => c.id === obj.type);
+      const row = document.createElement('div');
+      row.className = 'room-obj-row';
+      row.innerHTML = `
+        <img src="${cat?.thumb || '/assets/book.jpg'}" alt="${escapeHtml(cat?.shortName || '')}" />
+        <div class="room-obj-row-info">
+          <strong>${escapeHtml(obj.title || cat?.name || 'Objeto')}</strong>
+          <small>${escapeHtml(cat?.shortName || obj.type)} • (${obj.gx + 1}, ${obj.gy + 1})</small>
+        </div>
+        <button class="btn-ghost btn-sm" data-act="edit" title="Editar">✏️</button>
+        <button class="btn-ghost btn-sm" data-act="del" title="Remover">🗑️</button>
+      `;
+      row.querySelector('[data-act="edit"]').onclick = () => openObjectModal(obj, room);
+      row.querySelector('[data-act="del"]').onclick = () => {
+        room.objects = room.objects.filter((o) => o.id !== obj.id);
+        if (movingObjectId === obj.id) movingObjectId = null;
+        persistState();
+        refreshEditorPanel();
+      };
+      roomObjectsList.appendChild(row);
+    });
+  }
+}
+
 // ---------------- NAVEGAÇÃO E MODAIS ----------------
 function enterBuilding(buildingId) {
+  setEditMode(false);
   resetInnerCam();
   view = { mode: 'reception', buildingId, floorId: null, apartmentId: null, roomId: null };
   updateTopbar();
+  pushMyPresenceNow(true);
 }
 
 function openDecayConfigModal(building) {
   const currentLimit = building.decayDays || state.decayThresholdDays || 14;
   const wrap = document.createElement('div');
   wrap.innerHTML = `
-    <p style="color:var(--muted);font-size:13px;">Defina em quantos dias sem revisão o prédio <strong>${building.name}</strong> começa a ficar velho.</p>
+    <p style="color:var(--muted);font-size:13px;">Defina em quantos dias sem revisão o prédio <strong>${escapeHtml(building.name)}</strong> começa a ficar velho.</p>
     <div class="row-actions">
       <button class="btn-secondary preset-day" data-d="7">7 dias</button>
       <button class="btn-secondary preset-day" data-d="14">14 dias</button>
@@ -366,7 +679,7 @@ function openReceptionModal() {
   wrap.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
       <div>
-        <strong>Recepção — ${b.name}</strong><br/>
+        <strong>Recepção — ${escapeHtml(b.name)}</strong><br/>
         <small style="color:var(--muted)">Quadro de Índice dos Andares na Parede</small>
       </div>
       <span class="status-pill ${condClass}">${condText}</span>
@@ -381,11 +694,11 @@ function openReceptionModal() {
     b.floors.forEach((f) => {
       const fBox = document.createElement('div');
       fBox.className = 'card-box';
-      fBox.innerHTML = `<strong>${f.name}</strong>`;
+      fBox.innerHTML = `<strong>${escapeHtml(f.name)}</strong>`;
       f.apartments.forEach((ap) => {
         const apRow = document.createElement('div');
         apRow.style.marginTop = '6px';
-        apRow.innerHTML = `<div style="font-size:13px;color:var(--accent);margin-bottom:4px;">🚪 Apartamento: <strong>${ap.name}</strong></div>`;
+        apRow.innerHTML = `<div style="font-size:13px;color:var(--accent);margin-bottom:4px;">🚪 Apartamento: <strong>${escapeHtml(ap.name)}</strong></div>`;
         const btnWrap = document.createElement('div');
         btnWrap.className = 'row-actions';
         ap.rooms.forEach((rm) => {
@@ -404,7 +717,7 @@ function openReceptionModal() {
         addRoomBtn.onclick = () => {
           const name = prompt('Nome do novo cômodo/quarto (ex: Complicações, Quarto da Aguda):');
           if (!name) return;
-          ap.rooms.push({ id: uid('r'), name: name.trim(), objects: [] });
+          ap.rooms.push({ id: uid('r'), name: name.trim(), theme: 'clinic', objects: [] });
           persistState();
           openReceptionModal();
         };
@@ -425,6 +738,7 @@ function openReceptionModal() {
           rooms: DEFAULT_CLINICAL_ROOMS.map((rn) => ({
             id: uid('r'),
             name: rn,
+            theme: rn === 'Bibliografia' ? 'library' : 'clinic',
             isBibliography: rn === 'Bibliografia',
             pdfs: rn === 'Bibliografia' ? [] : undefined,
             objects: []
@@ -460,9 +774,10 @@ function enterRoom(buildingId, floorId, apartmentId, roomId) {
   resetInnerCam();
   view = { mode: 'room', buildingId, floorId, apartmentId, roomId };
   editMode = false;
-  btnToggleEdit.textContent = '✏️ Modo Edição: OFF';
-  objectPaletteEl.classList.add('hidden');
+  movingObjectId = null;
+  hoveredRoomTile = null;
   updateTopbar();
+  pushMyPresenceNow(true);
 
   const room = getCurrentRoom();
   if (room && room.isBibliography) {
@@ -485,7 +800,7 @@ function openBibliographyModal(room) {
       row.style.justifyContent = 'space-between';
       row.style.alignItems = 'center';
       row.style.gap = '8px';
-      row.innerHTML = `<span>📄 <strong>${p.name}</strong></span>`;
+      row.innerHTML = `<span>📄 <strong>${escapeHtml(p.name)}</strong></span>`;
       const openBtn = document.createElement('button');
       openBtn.className = 'btn-primary';
       openBtn.textContent = 'Abrir PDF';
@@ -500,7 +815,6 @@ function openBibliographyModal(room) {
   }
   wrap.appendChild(list);
 
-  // Opção 1: Link (Google Drive / URL)
   const linkBox = document.createElement('div');
   linkBox.className = 'card-box';
   linkBox.innerHTML = `
@@ -511,7 +825,6 @@ function openBibliographyModal(room) {
   `;
   wrap.appendChild(linkBox);
 
-  // Opção 2: Subir arquivo local
   const upBox = document.createElement('div');
   upBox.className = 'card-box';
   upBox.innerHTML = `
@@ -554,22 +867,27 @@ function openObjectModal(obj, room) {
   const wrap = document.createElement('div');
 
   if (!editMode) {
-    // Cartão limpo de estudo: APENAS Título + Resuminho + Link do PDF
     wrap.innerHTML = `
+      <div class="obj-modal-hero">
+        <img src="${cat?.thumb || '/assets/book.jpg'}" alt="${escapeHtml(cat?.name || '')}" />
+        <div>
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">${escapeHtml(cat?.name || 'Objeto')}</div>
+          <h3 style="color:var(--accent);font-size:17px;margin-top:2px;">${escapeHtml(obj.title || 'Sem título')}</h3>
+        </div>
+      </div>
       <div class="card-box">
-        <h3 style="color:var(--accent)">${obj.title || 'Sem título'}</h3>
-        <p>${obj.summary || 'Sem resumo cadastrado.'}</p>
-        <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;">
+        <p>${escapeHtml(obj.summary || 'Sem resumo cadastrado.')}</p>
+        <div style="border-top:1px solid var(--border-soft);padding-top:8px;margin-top:4px;">
           <small style="color:var(--muted)">Referência no PDF:</small><br/>
-          <strong>${obj.pdfLabel || 'Sem referência'}</strong>
+          <strong>${escapeHtml(obj.pdfLabel || 'Sem referência')}</strong>
         </div>
       </div>
       <div class="row-actions">
         <button id="btnOpenRef" class="btn-primary">📄 Abrir no PDF</button>
-        <button id="btnEditObj" class="btn-secondary">✏️ Editar</button>
+        ${sharedRole !== 'viewer' ? '<button id="btnEditObj" class="btn-secondary">✏️ Editar Objeto</button>' : ''}
       </div>
     `;
-    openModal(`${cat?.icon || '📦'} ${cat?.name || 'Objeto'}`, wrap);
+    openModal(`${cat?.icon || '📦'} Revisão do Objeto`, wrap);
 
     document.getElementById('btnOpenRef').onclick = () => {
       const ap = getCurrentApartment();
@@ -583,37 +901,68 @@ function openObjectModal(obj, room) {
         localPdfId: linkedBib?.sourceType === 'local' ? linkedBib.id : null
       });
     };
-    document.getElementById('btnEditObj').onclick = () => {
-      editMode = true;
-      btnToggleEdit.textContent = '✏️ Modo Edição: ON';
-      objectPaletteEl.classList.remove('hidden');
-      openObjectModal(obj, room);
-    };
+    const editBtn = document.getElementById('btnEditObj');
+    if (editBtn) {
+      editBtn.onclick = () => {
+        setEditMode(true);
+        openObjectModal(obj, room);
+      };
+    }
   } else {
     const ap = getCurrentApartment();
     const bibPdfs = ap?.rooms.find((r) => r.isBibliography)?.pdfs || [];
     const bibOptions = bibPdfs
-      .map((p) => `<option value="${p.id}" ${obj.bibPdfId === p.id ? 'selected' : ''}>${p.name}</option>`)
+      .map((p) => `<option value="${p.id}" ${obj.bibPdfId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
+      .join('');
+    const typeOptions = OBJECT_CATALOG
+      .map((c) => `<option value="${c.id}" ${obj.type === c.id ? 'selected' : ''}>${c.icon} ${escapeHtml(c.name)}</option>`)
       .join('');
 
     wrap.innerHTML = `
-      <div class="field"><label>Título</label><input id="objTitle" value="${obj.title || ''}" /></div>
-      <div class="field"><label>Resuminho</label><textarea id="objSummary" rows="3">${obj.summary || ''}</textarea></div>
-      <div class="field"><label>Referência (ex: Diretriz AVC — Pág. 7)</label><input id="objPdfLabel" value="${obj.pdfLabel || ''}" /></div>
-      ${bibPdfs.length ? `<div class="field"><label>PDF da Bibliografia deste assunto</label><select id="objBibPdf"><option value="">(Nenhum / usar link abaixo)</option>${bibOptions}</select></div>` : ''}
-      <div class="field"><label>Link do PDF (Google Drive ou URL)</label><input id="objPdfUrl" value="${obj.pdfUrl || ''}" placeholder="https://drive.google.com/..." /></div>
-      <div style="display:flex;gap:8px;">
-        <div class="field" style="flex:1;"><label>Página exata</label><input id="objPdfPage" type="number" min="1" value="${obj.pdfPage || 1}" /></div>
-        <div class="field" style="flex:2;"><label>Trecho para destacar (opcional)</label><input id="objPdfQuote" value="${obj.pdfQuote || ''}" placeholder="Ex: trombólise" /></div>
+      <div class="obj-modal-hero">
+        <img id="editObjPreviewImg" src="${cat?.thumb || '/assets/book.jpg'}" alt="" />
+        <div class="field" style="flex:1;">
+          <label>Modelo visual do móvel</label>
+          <select id="objType">${typeOptions}</select>
+        </div>
       </div>
-      <div class="row-actions">
-        <button id="btnSaveObj" class="btn-success">Salvar</button>
-        <button id="btnDelObj" class="btn-danger">Remover da Sala</button>
+
+      <div class="card-box">
+        <div class="editor-section-label" style="margin-bottom:2px;">Conteúdo de Estudo</div>
+        <div class="field"><label>Título</label><input id="objTitle" value="${escapeHtml(obj.title || '')}" placeholder="Ex: Radiografia de Tórax" /></div>
+        <div class="field"><label>Resuminho</label><textarea id="objSummary" rows="3" placeholder="Pontos-chave para lembrar na revisão...">${escapeHtml(obj.summary || '')}</textarea></div>
+      </div>
+
+      <div class="card-box">
+        <div class="editor-section-label" style="margin-bottom:2px;">Referência & PDF</div>
+        <div class="field"><label>Nome da referência (ex: Diretriz AVC — Pág. 7)</label><input id="objPdfLabel" value="${escapeHtml(obj.pdfLabel || '')}" /></div>
+        ${bibPdfs.length ? `<div class="field"><label>PDF da Bibliografia deste assunto</label><select id="objBibPdf"><option value="">(Nenhum / usar link abaixo)</option>${bibOptions}</select></div>` : ''}
+        <div class="field"><label>Link do PDF (Google Drive ou URL)</label><input id="objPdfUrl" value="${escapeHtml(obj.pdfUrl || '')}" placeholder="https://drive.google.com/..." /></div>
+        <div style="display:flex;gap:8px;">
+          <div class="field" style="flex:1;"><label>Página exata</label><input id="objPdfPage" type="number" min="1" value="${obj.pdfPage || 1}" /></div>
+          <div class="field" style="flex:2;"><label>Trecho para destacar</label><input id="objPdfQuote" value="${escapeHtml(obj.pdfQuote || '')}" placeholder="Ex: trombólise" /></div>
+        </div>
+      </div>
+
+      <div class="row-actions" style="justify-content:space-between;">
+        <div class="row-actions">
+          <button id="btnSaveObj" class="btn-success">💾 Salvar</button>
+          <button id="btnMoveThisObj" class="btn-secondary">✋ Mover de lugar</button>
+        </div>
+        <button id="btnDelObj" class="btn-danger">🗑️ Remover</button>
       </div>
     `;
-    openModal(`✏️ Editar ${cat?.name || 'Objeto'}`, wrap);
+    openModal(`✏️ Editar Objeto`, wrap);
+
+    const typeSel = document.getElementById('objType');
+    const previewImg = document.getElementById('editObjPreviewImg');
+    typeSel.onchange = () => {
+      const nextCat = OBJECT_CATALOG.find((c) => c.id === typeSel.value);
+      if (nextCat) previewImg.src = nextCat.thumb;
+    };
 
     document.getElementById('btnSaveObj').onclick = () => {
+      obj.type = typeSel.value;
       obj.title = document.getElementById('objTitle').value.trim();
       obj.summary = document.getElementById('objSummary').value.trim();
       obj.pdfLabel = document.getElementById('objPdfLabel').value.trim();
@@ -622,11 +971,21 @@ function openObjectModal(obj, room) {
       obj.pdfPage = Math.max(1, parseInt(document.getElementById('objPdfPage').value, 10) || 1);
       obj.pdfQuote = document.getElementById('objPdfQuote').value.trim();
       persistState();
+      refreshEditorPanel();
       closeModal();
+    };
+    document.getElementById('btnMoveThisObj').onclick = () => {
+      closeModal();
+      setEditorTab('move');
+      movingObjectId = obj.id;
+      refreshEditorPanel();
+      updateEditorBanner();
     };
     document.getElementById('btnDelObj').onclick = () => {
       room.objects = room.objects.filter((o) => o.id !== obj.id);
+      if (movingObjectId === obj.id) movingObjectId = null;
       persistState();
+      refreshEditorPanel();
       closeModal();
     };
   }
@@ -673,145 +1032,137 @@ function openNewBuildingModal() {
   };
 }
 
-// ---------------- RENDERIZAÇÃO DA RECEPÇÃO (ISOMÉTRICO 2.5D) ----------------
+// ---------------- GEOMETRIA ISOMÉTRICA ----------------
+function isoToScreen(gx, gy, originX, originY, tileW, tileH) {
+  return {
+    x: originX + (gx - gy) * (tileW / 2),
+    y: originY + (gx + gy) * (tileH / 2)
+  };
+}
+
+function drawRoomBackdrop(themeId) {
+  const theme = getRoomTheme(themeId);
+  const grad = ctx.createRadialGradient(
+    canvasCssW * 0.5, canvasCssH * 0.42, 40,
+    canvasCssW * 0.5, canvasCssH * 0.5, Math.max(canvasCssW, canvasCssH) * 0.78
+  );
+  grad.addColorStop(0, theme.bgTop);
+  grad.addColorStop(1, theme.bgBottom);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvasCssW, canvasCssH);
+}
+
+// ---------------- RENDERIZAÇÃO DA RECEPÇÃO (ISOMÉTRICO 2.5D ILUSTRADO) ----------------
 function renderReception(now) {
   const b = getCurrentBuilding();
-  ctx.fillStyle = '#141c2b';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawRoomBackdrop('clinic');
   if (!b) return;
 
   ctx.save();
-  ctx.translate(canvas.width / 2 + innerCam.x, canvas.height / 2 + innerCam.y);
+  ctx.translate(canvasCssW / 2 + innerCam.x, canvasCssH / 2 + innerCam.y);
   ctx.scale(innerCam.zoom, innerCam.zoom);
-  ctx.translate(-canvas.width / 2, -canvas.height / 2);
+  ctx.translate(-canvasCssW / 2, -canvasCssH / 2);
 
   const cols = 7;
   const rows = 5;
-  const tileW = Math.min(Math.floor((canvas.width - 40) / (cols + rows) * 1.9), Math.floor((canvas.height - 150) / (cols + rows) * 3.2), 76);
+  const tileW = Math.min(
+    Math.floor((canvasCssW - 36) / (cols + rows) * 2.05),
+    Math.floor((canvasCssH - 110) / (cols + rows) * 3.5),
+    108
+  );
   const tileH = Math.floor(tileW / 2);
-  const originX = Math.floor(canvas.width / 2) - Math.floor((cols - rows) * (tileW / 4));
-  const originY = Math.floor((canvas.height - 60) / 2) - Math.floor((cols + rows) * (tileH / 4)) + 34;
-  const wallH = Math.floor(tileW * 1.25);
+  const originX = Math.floor(canvasCssW / 2) - Math.floor((cols - rows) * (tileW / 4));
+  const originY = Math.floor((canvasCssH - 20) / 2) - Math.floor((cols + rows) * (tileH / 4)) + 44;
 
-  const p0 = isoToScreen(0, 0, originX, originY, tileW, tileH);
-  const pLeft = isoToScreen(0, rows, originX, originY, tileW, tileH);
-  const pRight = isoToScreen(cols, 0, originX, originY, tileW, tileH);
-
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = '#1e293b';
-
-  // Parede esquerda (creme hospitalar + faixa da cor do prédio)
-  ctx.fillStyle = '#e8e2d5';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - wallH); ctx.lineTo(pLeft.x, pLeft.y - wallH);
-  ctx.lineTo(pLeft.x, pLeft.y); ctx.lineTo(p0.x, p0.y);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  ctx.fillStyle = b.color || '#5a7a61';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - 14); ctx.lineTo(pLeft.x, pLeft.y - 14);
-  ctx.lineTo(pLeft.x, pLeft.y); ctx.lineTo(p0.x, p0.y);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  // Parede direita (sombreada)
-  ctx.fillStyle = '#d6cfc0';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - wallH); ctx.lineTo(pRight.x, pRight.y - wallH);
-  ctx.lineTo(pRight.x, pRight.y); ctx.lineTo(p0.x, p0.y);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  ctx.fillStyle = b.color || '#46614c';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - 14); ctx.lineTo(pRight.x, pRight.y - 14);
-  ctx.lineTo(pRight.x, pRight.y); ctx.lineTo(p0.x, p0.y);
-  ctx.closePath(); ctx.fill(); ctx.stroke();
-
-  // Piso isométrico da recepção
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const top = isoToScreen(c, r, originX, originY, tileW, tileH);
-      const right = isoToScreen(c + 1, r, originX, originY, tileW, tileH);
-      const bottom = isoToScreen(c + 1, r + 1, originX, originY, tileW, tileH);
-      const left = isoToScreen(c, r + 1, originX, originY, tileW, tileH);
-      ctx.fillStyle = (r + c) % 2 === 0 ? '#f1ede4' : '#e2ddd2';
-      ctx.beginPath();
-      ctx.moveTo(top.x, top.y); ctx.lineTo(right.x, right.y);
-      ctx.lineTo(bottom.x, bottom.y); ctx.lineTo(left.x, left.y);
-      ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = 'rgba(30, 41, 59, 0.2)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-  }
+  drawIllustratedRoomShell(ctx, {
+    originX, originY, tileW, tileH, cols, rows,
+    themeId: 'clinic', isNight: state.isNight, editMode: false
+  });
 
   // Balcão isométrico da Recepção + Atendente
-  const deskPos = isoToScreen(4.6, 1.3, originX, originY, tileW, tileH);
-  drawAvatar(ctx, deskPos.x + 8, deskPos.y - 20, '#f8fafc', 'Recepção');
-  drawIsoBox(ctx, deskPos.x, deskPos.y, tileW * 1.4, tileH * 0.85, 22, '#c2956e', '#a37854', '#855f40', '#1e293b');
+  const deskPos = isoToScreen(4.6, 1.4, originX, originY, tileW, tileH);
+  const avScale = Math.max(1.05, tileW / 66);
+  drawAvatar(ctx, deskPos.x + 8, deskPos.y - 22, '#f8fafc', 'Recepção', '', avScale);
+  drawIsoBox(ctx, deskPos.x, deskPos.y, tileW * 1.45, tileH * 0.85, Math.floor(tileW * 0.34), '#d8a978', '#b98858', '#996b42', '#2b2520');
 
   // Quadro de Índice em destaque no topo esquerdo (clicável!)
-  const boardW = Math.min(270, Math.floor(canvas.width * 0.62));
-  const boardH = 92;
+  const p0 = isoToScreen(0, 0, originX, originY, tileW, tileH);
+  const wallH = Math.floor(tileW * 1.32);
+  const boardW = Math.min(280, Math.floor(canvasCssW * 0.62));
+  const boardH = 96;
   const boardX = Math.max(16, Math.floor(p0.x - boardW - 18));
   const boardY = Math.max(14, Math.floor(p0.y - wallH + 6));
   ctx.fillStyle = '#0f172a';
   ctx.strokeStyle = '#facc15';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.roundRect(boardX, boardY, boardW, boardH, 8);
+  ctx.roundRect(boardX, boardY, boardW, boardH, 10);
   ctx.fill();
   ctx.stroke();
 
   ctx.fillStyle = '#facc15';
   ctx.font = 'bold 11px system-ui, sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText(`📋 ÍNDICE — ${b.name.toUpperCase()}`, boardX + 10, boardY + 18);
+  ctx.fillText(`📋 ÍNDICE — ${b.name.toUpperCase()}`, boardX + 10, boardY + 19);
 
   const cond = getBuildingCondition(b, state.decayThresholdDays);
   const statusColor = cond === 'new' ? '#22c55e' : cond === 'worn' ? '#f59e0b' : '#ef4444';
   if (b.floors.length === 0) {
     ctx.fillStyle = '#94a3b8';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText('Clique para criar o 1º andar...', boardX + 10, boardY + 42);
+    ctx.fillText('Clique para criar o 1º andar...', boardX + 10, boardY + 44);
   } else {
     b.floors.slice(0, 4).forEach((f, idx) => {
-      const ly = boardY + 37 + idx * 15;
+      const ly = boardY + 38 + idx * 15;
       ctx.fillStyle = statusColor;
       ctx.beginPath();
       ctx.arc(boardX + 14, ly - 3.5, 3.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#f8fafc';
       ctx.font = '11px system-ui, sans-serif';
-      ctx.fillText(f.name.slice(0, 30), boardX + 24, ly);
+      ctx.fillText(f.name.slice(0, 32), boardX + 24, ly);
     });
   }
   canvas._receptionBoard = { x: boardX, y: boardY, w: boardW, h: boardH };
 
-  // Pessoas circulando na recepção
+  // Seu avatar e colegas conectados nesta mesma recepção
+  const mePt = isoToScreen(2.7, 3.4, originX, originY, tileW, tileH);
+  drawAvatar(ctx, mePt.x, mePt.y, myAvatar.color, myAvatar.name, myEmote, avScale);
+
+  canvas._receptionPeers = [];
+  let peerIdx = 0;
+  remotePeers.forEach((peer) => {
+    if (peer.id === myPeerId || peer.mode !== 'reception' || peer.buildingId !== b.id) return;
+    const px = 3.8 + (peerIdx % 3) * 0.9;
+    const py = 3.1 + Math.floor(peerIdx / 3) * 0.85;
+    peerIdx++;
+    const pt = isoToScreen(px, py, originX, originY, tileW, tileH);
+    drawAvatar(ctx, pt.x, pt.y, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', avScale, true);
+    canvas._receptionPeers.push({ peer, x: pt.x, y: pt.y });
+  });
+
+  // Visitantes ambiente na recepção
   const t = now * 0.001;
-  const v1 = isoToScreen(2.2 + Math.sin(t * 0.8) * 1.1, 3.0, originX, originY, tileW, tileH);
-  const v2 = isoToScreen(4.5, 3.2 + Math.cos(t * 0.7) * 0.9, originX, originY, tileW, tileH);
-  drawAvatar(ctx, v1.x, v1.y, '#a855f7', '');
-  drawAvatar(ctx, v2.x, v2.y, '#5a7a61', '');
+  const v1 = isoToScreen(1.5 + Math.sin(t * 0.7) * 0.6, 2.8, originX, originY, tileW, tileH);
+  drawAvatar(ctx, v1.x, v1.y, '#a855f7', '', '', avScale * 0.92);
   ctx.restore();
 }
 
 // ---------------- RENDERIZAÇÃO DA CIDADE ----------------
 function renderCity() {
   ctx.save();
-  ctx.fillStyle = state.isNight ? '#0b1120' : '#0284c7'; // Mar ao fundo
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = state.isNight ? '#0b1120' : '#0284c7';
+  ctx.fillRect(0, 0, canvasCssW, canvasCssH);
 
-  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.translate(canvasCssW / 2, canvasCssH / 2);
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cam.x, -cam.y);
 
-  // Grama base do condado (paleta suave aconchegante)
+  // Grama base do condado
   ctx.fillStyle = state.isNight ? '#1e3a2f' : '#8ab17d';
   ctx.fillRect(0, 2 * TILE, WORLD_W, 12 * TILE);
 
-  // Montanhas no limite norte (sem borda preta)
+  // Montanhas no limite norte
   for (let i = 0; i < 24; i++) {
     const mx = i * TILE;
     ctx.fillStyle = state.isNight ? '#1e293b' : '#64748b';
@@ -836,7 +1187,7 @@ function renderCity() {
     ctx.fillRect(i * 96 + 12, 14.4 * TILE, 28, 3);
   }
 
-  // Estradinha de entrada/saída horizontal e cruzamento vertical
+  // Estradinhas
   ctx.fillStyle = '#334155';
   ctx.fillRect(0, 8 * TILE, WORLD_W, TILE);
   ctx.fillRect(14 * TILE, 2 * TILE, TILE, 12 * TILE);
@@ -848,48 +1199,40 @@ function renderCity() {
     ctx.fillRect(15.1 * TILE, 8 * TILE + 6 + s * 10, 12, 5);
   }
 
-  // Semáforo visual
+  // Semáforo
   ctx.fillStyle = '#0f172a';
   ctx.fillRect(13.7 * TILE, 7.4 * TILE, 10, 20);
   ctx.fillStyle = trafficLightGreen ? '#22c55e' : '#ef4444';
   ctx.fillRect(13.7 * TILE + 2, 7.4 * TILE + 3, 6, 6);
 
-  // Praça Central (com laguinho, patos e banquinhos)
+  // Praça Central
   ctx.fillStyle = state.isNight ? '#1e3a2f' : '#86efac';
   ctx.fillRect(10 * TILE, 9.2 * TILE, 3.8 * TILE, 3 * TILE);
-  // Laguinho
   ctx.fillStyle = '#38bdf8';
   ctx.fillRect(11.4 * TILE, 10 * TILE, 1.8 * TILE, 1.3 * TILE);
-  // Patos no lago
   ducks.forEach((d) => {
     ctx.fillStyle = '#fef08a';
     ctx.fillRect(d.x, d.y + Math.sin(d.angle) * 3, 6, 4);
   });
-  // Banquinhos
   ctx.fillStyle = '#92400e';
   ctx.fillRect(10.3 * TILE, 9.6 * TILE, 20, 6);
   ctx.fillRect(10.3 * TILE, 11.4 * TILE, 20, 6);
 
-  // Casinhas decorativas (não clicáveis)
+  // Casinhas decorativas
   drawHouse(ctx, 2 * TILE, 10 * TILE, '#f97316', state.isNight);
   drawHouse(ctx, 7 * TILE, 10.5 * TILE, '#ec4899', state.isNight);
   drawHouse(ctx, 20 * TILE, 10 * TILE, '#14b8a6', state.isNight);
 
-  // Marcos inaugurados pelo Prefeito conforme rondas concluídas
+  // Marcos do Prefeito
   const rondas = state.rondasConcluidas || 0;
-  if (rondas >= 1) {
-    drawMuseum(ctx, 16 * TILE, 10.2 * TILE, state.isNight);
-  }
+  if (rondas >= 1) drawMuseum(ctx, 16 * TILE, 10.2 * TILE, state.isNight);
   if (rondas >= 3) {
     drawHouse(ctx, 21 * TILE, 4.5 * TILE, '#6366f1', state.isNight);
     drawHouse(ctx, 8 * TILE, 12.2 * TILE, '#84cc16', state.isNight);
   }
-  if (rondas >= 5) {
-    // Pescador na beira do lago da praça
-    drawAvatar(ctx, 11.2 * TILE, 10.6 * TILE, '#0ea5e9', 'Pescador');
-  }
+  if (rondas >= 5) drawAvatar(ctx, 11.2 * TILE, 10.6 * TILE, '#0ea5e9', 'Pescador');
 
-  // Árvores (murcham se todos os prédios estiverem velhos)
+  // Árvores
   const allOld = state.buildings.every((b) => getBuildingCondition(b, state.decayThresholdDays) === 'old');
   [[1.5, 4], [8.5, 5], [16.5, 5], [10.2, 11.8], [21.5, 6]].forEach(([gx, gy]) => {
     drawTree(ctx, gx * TILE, gy * TILE, allOld);
@@ -918,130 +1261,102 @@ function renderCity() {
   cars.forEach((c) => drawCar(ctx, c.x, c.y, c.color, !c.vertical));
   pedestrians.forEach((p) => drawAvatar(ctx, p.x, p.y, p.shirt, ''));
 
-  // Amigos conectados no mundo (até 10 pessoas)
+  // Amigos conectados na cidade (com posição interpolada)
   remotePeers.forEach((peer) => {
     if (peer.id === myPeerId) return;
-    if (peer.mode === 'city') {
-      drawAvatar(ctx, peer.x || 12 * TILE, peer.y || 9.5 * TILE, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '');
+    if (!peer.mode || peer.mode === 'city') {
+      const sp = peerSmoothPos.get(peer.id);
+      const px = sp ? sp.x : (peer.x || 12 * TILE);
+      const py = sp ? sp.y : (peer.y || 9.5 * TILE);
+      drawAvatar(ctx, px, py, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', 1.05, true);
     }
   });
 
   // Avatar do jogador
-  drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote);
+  drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote, 1.05);
 
   ctx.restore();
 }
 
-// ---------------- RENDERIZAÇÃO DO CÔMODO (ISOMÉTRICO 2.5D) ----------------
-function isoToScreen(gx, gy, originX, originY, tileW, tileH) {
-  return {
-    x: originX + (gx - gy) * (tileW / 2),
-    y: originY + (gx + gy) * (tileH / 2)
-  };
-}
-
+// ---------------- RENDERIZAÇÃO DO CÔMODO (ISOMÉTRICO 2.5D ILUSTRADO & MAIOR) ----------------
 function renderRoom() {
   const room = getCurrentRoom();
-  ctx.fillStyle = '#141c2b';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawRoomBackdrop(room?.theme || 'clinic');
   if (!room) return;
 
   ctx.save();
-  ctx.translate(canvas.width / 2 + innerCam.x, canvas.height / 2 + innerCam.y);
+  ctx.translate(canvasCssW / 2 + innerCam.x, canvasCssH / 2 + innerCam.y);
   ctx.scale(innerCam.zoom, innerCam.zoom);
-  ctx.translate(-canvas.width / 2, -canvas.height / 2);
+  ctx.translate(-canvasCssW / 2, -canvasCssH / 2);
 
   const cols = 7;
   const rows = 6;
-  const tileW = Math.min(Math.floor((canvas.width - 40) / (cols + rows) * 1.9), Math.floor((canvas.height - 150) / (cols + rows) * 3.2), 76);
+
+  // Quando o Estúdio de Edição está aberto no desktop, desloca o centro um pouco à esquerda
+  const editorDesktopOffset = editMode && canvasCssW > 780 ? 148 : 0;
+  const availW = Math.max(300, canvasCssW - editorDesktopOffset * 2 - 24);
+  const availH = Math.max(240, canvasCssH - (editMode && canvasCssW <= 780 ? 220 : 88));
+
+  // Escala bem mais generosa para enxergar todos os detalhes dos móveis ilustrados!
+  const tileW = Math.max(
+    64,
+    Math.min(
+      Math.floor((availW / (cols + rows)) * 2.15),
+      Math.floor((availH / (cols + rows)) * 3.75),
+      124
+    )
+  );
   const tileH = Math.floor(tileW / 2);
-  const originX = Math.floor(canvas.width / 2) - Math.floor((cols - rows) * (tileW / 4));
-  const originY = Math.floor((canvas.height - 60) / 2) - Math.floor((cols + rows) * (tileH / 4)) + 24;
+  const centerX = Math.floor((canvasCssW - editorDesktopOffset * 2) / 2);
+  const originX = centerX - Math.floor((cols - rows) * (tileW / 4));
+  const originY = Math.floor(availH / 2) - Math.floor((cols + rows) * (tileH / 4)) + Math.floor(tileW * 0.56);
 
-  const wallH = Math.floor(tileW * 1.15);
+  const movingObj = movingObjectId ? room.objects.find((o) => o.id === movingObjectId) : null;
 
-  // Parede esquerda (fundo-esquerda: gx = 0, gy de 0..rows)
-  const p0 = isoToScreen(0, 0, originX, originY, tileW, tileH);
-  const pLeft = isoToScreen(0, rows, originX, originY, tileW, tileH);
-  const pRight = isoToScreen(cols, 0, originX, originY, tileW, tileH);
+  drawIllustratedRoomShell(ctx, {
+    originX,
+    originY,
+    tileW,
+    tileH,
+    cols,
+    rows,
+    themeId: room.theme || 'clinic',
+    isNight: state.isNight,
+    editMode,
+    hoverTile: editMode ? hoveredRoomTile : null,
+    selectedMoveTile: movingObj ? { gx: movingObj.gx, gy: movingObj.gy } : null
+  });
 
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = '#1e293b';
-
-  // Parede traseira esquerda (creme aconchegante)
-  ctx.fillStyle = '#e8e2d5';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - wallH);
-  ctx.lineTo(pLeft.x, pLeft.y - wallH);
-  ctx.lineTo(pLeft.x, pLeft.y);
-  ctx.lineTo(p0.x, p0.y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Faixa verde-oliva na parede esquerda
-  ctx.fillStyle = '#5a7a61';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - 14);
-  ctx.lineTo(pLeft.x, pLeft.y - 14);
-  ctx.lineTo(pLeft.x, pLeft.y);
-  ctx.lineTo(p0.x, p0.y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Parede traseira direita (sombreada)
-  ctx.fillStyle = '#d6cfc0';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - wallH);
-  ctx.lineTo(pRight.x, pRight.y - wallH);
-  ctx.lineTo(pRight.x, pRight.y);
-  ctx.lineTo(p0.x, p0.y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = '#46614c';
-  ctx.beginPath();
-  ctx.moveTo(p0.x, p0.y - 14);
-  ctx.lineTo(pRight.x, pRight.y - 14);
-  ctx.lineTo(pRight.x, pRight.y);
-  ctx.lineTo(p0.x, p0.y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Piso isométrico (losangos 2:1)
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const top = isoToScreen(c, r, originX, originY, tileW, tileH);
-      const right = isoToScreen(c + 1, r, originX, originY, tileW, tileH);
-      const bottom = isoToScreen(c + 1, r + 1, originX, originY, tileW, tileH);
-      const left = isoToScreen(c, r + 1, originX, originY, tileW, tileH);
-
-      ctx.fillStyle = (r + c) % 2 === 0 ? '#f1ede4' : '#e2ddd2';
-      ctx.beginPath();
-      ctx.moveTo(top.x, top.y);
-      ctx.lineTo(right.x, right.y);
-      ctx.lineTo(bottom.x, bottom.y);
-      ctx.lineTo(left.x, left.y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = editMode ? 'rgba(56, 189, 248, 0.45)' : 'rgba(30, 41, 59, 0.22)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-  }
-
-  // Objetos e avatares ordenados por profundidade (gx + gy) para sobreposição natural
+  // Objetos, fantasma de posicionamento e avatares ordenados por profundidade (gx + gy)
   const renderables = room.objects.map((obj) => ({
     kind: 'object',
     depth: obj.gx + obj.gy,
     gx: obj.gx + 0.5,
     gy: obj.gy + 0.5,
-    obj
+    obj,
+    highlighted: movingObjectId === obj.id || (editMode && hoveredRoomTile && hoveredRoomTile.gx === obj.gx && hoveredRoomTile.gy === obj.gy)
   }));
+
+  // Pré-visualização translúcida no ladrilho vazio sob o cursor no Modo Edição
+  if (editMode && hoveredRoomTile && !hoveredRoomTile.occupied) {
+    const ghostType =
+      editorTab === 'add'
+        ? selectedPaletteType
+        : editorTab === 'move' && movingObj
+          ? movingObj.type
+          : null;
+    if (ghostType) {
+      renderables.push({
+        kind: 'ghost',
+        depth: hoveredRoomTile.gx + hoveredRoomTile.gy,
+        gx: hoveredRoomTile.gx + 0.5,
+        gy: hoveredRoomTile.gy + 0.5,
+        type: ghostType
+      });
+    }
+  }
+
+  const avScale = Math.max(1.12, tileW / 66);
 
   renderables.push({
     kind: 'avatar',
@@ -1050,13 +1365,15 @@ function renderRoom() {
     gy: roomPlayer.gy,
     color: myAvatar.color,
     name: myAvatar.name,
-    emote: myEmote
+    emote: myEmote,
+    isPeer: false
   });
 
   remotePeers.forEach((peer) => {
     if (peer.id !== myPeerId && peer.mode === 'room' && peer.roomId === room.id) {
-      const pgx = typeof peer.rgx === 'number' ? peer.rgx : 3.5;
-      const pgy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
+      const sp = peerSmoothPos.get(peer.id);
+      const pgx = sp && typeof sp.rgx === 'number' ? sp.rgx : (typeof peer.rgx === 'number' ? peer.rgx : 3.5);
+      const pgy = sp && typeof sp.rgy === 'number' ? sp.rgy : (typeof peer.rgy === 'number' ? peer.rgy : 4.5);
       renderables.push({
         kind: 'avatar',
         depth: pgx + pgy,
@@ -1064,7 +1381,8 @@ function renderRoom() {
         gy: pgy,
         color: peer.color || '#f43f5e',
         name: peer.name || 'Amigo',
-        emote: peer.emote || ''
+        emote: peer.emote || '',
+        isPeer: true
       });
     }
   });
@@ -1073,15 +1391,41 @@ function renderRoom() {
   renderables.forEach((item) => {
     const pt = isoToScreen(item.gx, item.gy, originX, originY, tileW, tileH);
     if (item.kind === 'object') {
-      drawRoomObject(ctx, item.obj.type, pt.x, pt.y, tileW, editMode);
+      drawRoomObject(ctx, item.obj.type, pt.x, pt.y, tileW, {
+        editMode,
+        highlighted: item.highlighted,
+        alpha: movingObjectId === item.obj.id ? 0.65 : 1
+      });
+    } else if (item.kind === 'ghost') {
+      drawRoomObject(ctx, item.type, pt.x, pt.y, tileW, {
+        editMode: false,
+        highlighted: true,
+        alpha: 0.55
+      });
     } else {
-      drawAvatar(ctx, pt.x, pt.y, item.color, item.name, item.emote || '');
+      drawAvatar(ctx, pt.x, pt.y, item.color, item.name, item.emote || '', avScale, item.isPeer);
     }
   });
 
-  // Guarda geometria isométrica para clique
+  // Guarda geometria isométrica para clique/hover
   canvas._roomGrid = { originX, originY, tileW, tileH, cols, rows };
   ctx.restore();
+}
+
+function screenToRoomTile(clientX, clientY) {
+  if (!canvas._roomGrid) return null;
+  const { originX, originY, tileW, tileH, cols, rows } = canvas._roomGrid;
+  const rect = canvas.getBoundingClientRect();
+  const cx = clientX - rect.left;
+  const cy = clientY - rect.top;
+  const ix = (cx - (canvasCssW / 2 + innerCam.x)) / innerCam.zoom + canvasCssW / 2;
+  const iy = (cy - (canvasCssH / 2 + innerCam.y)) / innerCam.zoom + canvasCssH / 2;
+  const dx = (ix - originX) / (tileW / 2);
+  const dy = (iy - originY) / (tileH / 2);
+  const gx = Math.floor((dx + dy) / 2);
+  const gy = Math.floor((dy - dx) / 2);
+  if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) return null;
+  return { gx, gy, ix, iy };
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
@@ -1090,15 +1434,40 @@ function loop(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
+  // Aplica escala DPR limpa no início de cada frame
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Interpolação suave das posições dos colegas conectados
+  const lerpAlpha = Math.min(1, dt * 10);
+  remotePeers.forEach((peer) => {
+    if (peer.id === myPeerId) return;
+    const tx = typeof peer.x === 'number' ? peer.x : 12 * TILE;
+    const ty = typeof peer.y === 'number' ? peer.y : 9.5 * TILE;
+    const trgx = typeof peer.rgx === 'number' ? peer.rgx : 3.5;
+    const trgy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
+    const cur = peerSmoothPos.get(peer.id);
+    if (!cur) {
+      peerSmoothPos.set(peer.id, { x: tx, y: ty, rgx: trgx, rgy: trgy });
+    } else {
+      cur.x += (tx - cur.x) * lerpAlpha;
+      cur.y += (ty - cur.y) * lerpAlpha;
+      cur.rgx += (trgx - cur.rgx) * lerpAlpha;
+      cur.rgy += (trgy - cur.rgy) * lerpAlpha;
+    }
+  });
+
+  // Ignora teclas de movimento se o usuário estiver digitando em algum campo
+  const typing =
+    document.activeElement &&
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+
   if (view.mode === 'city') {
-    // Semáforo alterna a cada 5s
     trafficTimer += dt;
     if (trafficTimer > 5) {
       trafficLightGreen = !trafficLightGreen;
       trafficTimer = 0;
     }
 
-    // Move carros
     cars.forEach((c) => {
       if (c.vertical) {
         if (!trafficLightGreen && c.y > 6.8 * TILE && c.y < 7.8 * TILE) return;
@@ -1112,7 +1481,6 @@ function loop(now) {
       }
     });
 
-    // Move pedestres e patos
     pedestrians.forEach((p) => {
       if (!p.vx) return;
       p.x += p.vx * dt;
@@ -1122,13 +1490,14 @@ function loop(now) {
       d.angle += dt * 2.5;
     });
 
-    // Movimento do jogador
     let dx = 0;
     let dy = 0;
-    if (keys['ArrowUp'] || keys['w'] || keys['W']) dy -= 1;
-    if (keys['ArrowDown'] || keys['s'] || keys['S']) dy += 1;
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx -= 1;
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) dx += 1;
+    if (!typing) {
+      if (keys['ArrowUp'] || keys['w'] || keys['W']) dy -= 1;
+      if (keys['ArrowDown'] || keys['s'] || keys['S']) dy += 1;
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) dx -= 1;
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) dx += 1;
+    }
 
     if (dx !== 0 || dy !== 0) {
       player.targetX = null;
@@ -1148,37 +1517,27 @@ function loop(now) {
     player.x = Math.max(TILE * 0.5, Math.min(WORLD_W - TILE * 0.5, player.x));
     player.y = Math.max(TILE * 2.2, Math.min(13.8 * TILE, player.y));
 
-    if (presenceConn && now - lastPresenceSent > 140) {
+    if (presenceConn && now - lastPresenceSent > 110) {
       lastPresenceSent = now;
-      presenceConn.updatePosition({
-        x: Math.round(player.x),
-        y: Math.round(player.y),
-        mode: view.mode,
-        buildingId: view.buildingId
-      });
+      pushMyPresenceNow(false);
     }
 
     renderCity();
   } else if (view.mode === 'reception') {
-    if (presenceConn && now - lastPresenceSent > 400) {
+    if (presenceConn && now - lastPresenceSent > 450) {
       lastPresenceSent = now;
-      presenceConn.updatePosition({
-        x: Math.round(player.x),
-        y: Math.round(player.y),
-        mode: 'reception',
-        buildingId: view.buildingId,
-        roomId: null
-      });
+      pushMyPresenceNow(false);
     }
     renderReception(now);
   } else {
-    // Movimento do avatar dentro do quarto (teclado ou toque no piso)
     let rdx = 0;
     let rdy = 0;
-    if (keys['ArrowUp'] || keys['w'] || keys['W']) { rdx -= 1; rdy -= 1; }
-    if (keys['ArrowDown'] || keys['s'] || keys['S']) { rdx += 1; rdy += 1; }
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) { rdx -= 1; rdy += 1; }
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) { rdx += 1; rdy -= 1; }
+    if (!typing && !editMode) {
+      if (keys['ArrowUp'] || keys['w'] || keys['W']) { rdx -= 1; rdy -= 1; }
+      if (keys['ArrowDown'] || keys['s'] || keys['S']) { rdx += 1; rdy += 1; }
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) { rdx -= 1; rdy += 1; }
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) { rdx += 1; rdy -= 1; }
+    }
 
     if (rdx !== 0 || rdy !== 0) {
       roomPlayer.targetGx = null;
@@ -1196,20 +1555,12 @@ function loop(now) {
         roomPlayer.gy += ((roomPlayer.targetGy - roomPlayer.gy) / dist) * roomPlayer.speed * dt;
       }
     }
-    roomPlayer.gx = Math.max(0.4, Math.min(7.6, roomPlayer.gx));
+    roomPlayer.gx = Math.max(0.4, Math.min(6.6, roomPlayer.gx));
     roomPlayer.gy = Math.max(0.4, Math.min(5.6, roomPlayer.gy));
 
-    if (presenceConn && now - lastPresenceSent > 180) {
+    if (presenceConn && now - lastPresenceSent > 120) {
       lastPresenceSent = now;
-      presenceConn.updatePosition({
-        x: Math.round(player.x),
-        y: Math.round(player.y),
-        mode: 'room',
-        buildingId: view.buildingId,
-        roomId: view.roomId,
-        rgx: Number(roomPlayer.gx.toFixed(2)),
-        rgy: Number(roomPlayer.gy.toFixed(2))
-      });
+      pushMyPresenceNow(false);
     }
 
     renderRoom();
@@ -1271,10 +1622,24 @@ canvas.addEventListener('pointermove', (e) => {
     }
     return;
   }
+
+  // Hover preview no Modo Edição do Quarto (desktop/mouse)
+  if (!cam.dragging && view.mode === 'room' && editMode) {
+    const hit = screenToRoomTile(e.clientX, e.clientY);
+    const room = getCurrentRoom();
+    if (hit && room) {
+      const occupied = room.objects.some((o) => o.gx === hit.gx && o.gy === hit.gy);
+      hoveredRoomTile = { gx: hit.gx, gy: hit.gy, occupied };
+    } else {
+      hoveredRoomTile = null;
+    }
+    return;
+  }
+
   if (!cam.dragging) return;
   const dx = e.clientX - cam.lastX;
   const dy = e.clientY - cam.lastY;
-  if (Math.hypot(dx, dy) > 4) cam.moved = true;
+  if (Math.hypot(dx, dy) > 5) cam.moved = true;
   if (view.mode === 'city') {
     cam.x -= dx / cam.zoom;
     cam.y -= dy / cam.zoom;
@@ -1286,6 +1651,10 @@ canvas.addEventListener('pointermove', (e) => {
   }
   cam.lastX = e.clientX;
   cam.lastY = e.clientY;
+});
+
+canvas.addEventListener('pointerleave', () => {
+  hoveredRoomTile = null;
 });
 
 canvas.addEventListener('pointercancel', (e) => {
@@ -1303,73 +1672,105 @@ canvas.addEventListener('pointerup', (e) => {
 
   if (view.mode === 'city') {
     const pt = screenToWorld(e.clientX, e.clientY);
-    // Verifica clique em algum amigo conectado na cidade
-    const clickedPeer = remotePeers.find(
-      (p) => p.id !== myPeerId && p.mode === 'city' && Math.hypot((p.x || 0) - pt.x, (p.y || 0) - pt.y) < 20
-    );
+    // Clique em algum colega conectado na cidade (área generosa para celular)
+    const clickedPeer = remotePeers.find((p) => {
+      if (p.id === myPeerId || (p.mode && p.mode !== 'city')) return false;
+      const sp = peerSmoothPos.get(p.id);
+      const px = sp ? sp.x : (p.x || 0);
+      const py = sp ? sp.y : (p.y || 0);
+      return Math.hypot(px - pt.x, py - pt.y) < 34;
+    });
     if (clickedPeer) {
       openPeerModal(clickedPeer);
       return;
     }
-    // Verifica clique em algum prédio
     for (const b of state.buildings) {
       const lot = CITY_LOTS.find((l) => l.id === b.lotId);
       if (!lot) continue;
       const bx = lot.gx * TILE;
       const by = lot.gy * TILE;
-      if (pt.x >= bx && pt.x <= bx + 84 && pt.y >= by && pt.y <= by + 74) {
+      if (pt.x >= bx - 6 && pt.x <= bx + 90 && pt.y >= by - 14 && pt.y <= by + 80) {
         enterBuilding(b.id);
         return;
       }
     }
-    // Senão, anda com o avatar até o ponto clicado
     player.targetX = pt.x;
     player.targetY = pt.y;
   } else if (view.mode === 'reception') {
     const rect = canvas.getBoundingClientRect();
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
-    const brd = canvas._receptionBoard;
-    if (brd && cx >= brd.x && cx <= brd.x + brd.w && cy >= brd.y && cy <= brd.y + brd.h) {
-      openReceptionModal();
-    } else {
-      // Clicar em qualquer ponto da recepção também pode abrir se tocar no balcão
-      openReceptionModal();
+    const ix = (cx - (canvasCssW / 2 + innerCam.x)) / innerCam.zoom + canvasCssW / 2;
+    const iy = (cy - (canvasCssH / 2 + innerCam.y)) / innerCam.zoom + canvasCssH / 2;
+
+    // Verifica clique em algum amigo na recepção
+    const clickedRecPeer = (canvas._receptionPeers || []).find(
+      (rp) => Math.hypot(rp.x - ix, rp.y - iy) < 34
+    );
+    if (clickedRecPeer) {
+      openPeerModal(clickedRecPeer.peer);
+      return;
     }
+    openReceptionModal();
   } else if (view.mode === 'room' && canvas._roomGrid) {
-    const { originX, originY, tileW, tileH, cols, rows } = canvas._roomGrid;
-    const rect = canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    // Compensar zoom/arraste interno antes de converter para grade isométrica
-    const ix = (cx - (canvas.width / 2 + innerCam.x)) / innerCam.zoom + canvas.width / 2;
-    const iy = (cy - (canvas.height / 2 + innerCam.y)) / innerCam.zoom + canvas.height / 2;
-    const dx = (ix - originX) / (tileW / 2);
-    const dy = (iy - originY) / (tileH / 2);
-    const gx = Math.floor((dx + dy) / 2);
-    const gy = Math.floor((dy - dx) / 2);
-    if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) return;
+    const hit = screenToRoomTile(e.clientX, e.clientY);
+    if (!hit) return;
+    const { gx, gy } = hit;
 
     const room = getCurrentRoom();
     if (!room) return;
-    // Verifica clique em algum amigo no mesmo quarto
-    const clickedRoomPeer = remotePeers.find((p) => {
-      if (p.id === myPeerId || p.mode !== 'room' || p.roomId !== room.id) return false;
-      const pgx = typeof p.rgx === 'number' ? p.rgx : 3.5;
-      const pgy = typeof p.rgy === 'number' ? p.rgy : 4.5;
-      return Math.hypot(pgx - (gx + 0.5), pgy - (gy + 0.5)) < 0.85;
-    });
-    if (clickedRoomPeer) {
-      openPeerModal(clickedRoomPeer);
+
+    // Verifica clique em algum colega no mesmo quarto (fora da aba de adicionar/mover)
+    if (!editMode) {
+      const clickedRoomPeer = remotePeers.find((p) => {
+        if (p.id === myPeerId || p.mode !== 'room' || p.roomId !== room.id) return false;
+        const sp = peerSmoothPos.get(p.id);
+        const pgx = sp ? sp.rgx : (typeof p.rgx === 'number' ? p.rgx : 3.5);
+        const pgy = sp ? sp.rgy : (typeof p.rgy === 'number' ? p.rgy : 4.5);
+        return Math.hypot(pgx - (gx + 0.5), pgy - (gy + 0.5)) < 0.95;
+      });
+      if (clickedRoomPeer) {
+        openPeerModal(clickedRoomPeer);
+        return;
+      }
+    }
+
+    const existing = room.objects.find((o) => o.gx === gx && o.gy === gy);
+
+    if (!editMode) {
+      if (existing) {
+        openObjectModal(existing, room);
+      } else {
+        roomPlayer.targetGx = gx + 0.5;
+        roomPlayer.targetGy = gy + 0.5;
+      }
       return;
     }
-    const existing = room.objects.find((o) => o.gx === gx && o.gy === gy);
+
+    // MODO EDIÇÃO: comportamento inteligente por aba
+    if (editorTab === 'move') {
+      if (existing) {
+        movingObjectId = movingObjectId === existing.id ? null : existing.id;
+        refreshEditorPanel();
+        updateEditorBanner();
+      } else if (movingObjectId) {
+        const obj = room.objects.find((o) => o.id === movingObjectId);
+        if (obj) {
+          obj.gx = gx;
+          obj.gy = gy;
+          movingObjectId = null;
+          persistState();
+          refreshEditorPanel();
+          updateEditorBanner();
+          showToast(`✋ "${obj.title || 'Objeto'}" reposicionado!`);
+        }
+      }
+      return;
+    }
+
     if (existing) {
       openObjectModal(existing, room);
-    } else if (!editMode) {
-      roomPlayer.targetGx = gx + 0.5;
-      roomPlayer.targetGy = gy + 0.5;
-    } else if (editMode) {
+    } else if (editorTab === 'add') {
       const cat = OBJECT_CATALOG.find((c) => c.id === selectedPaletteType);
       const newObj = {
         id: uid('obj'),
@@ -1383,14 +1784,45 @@ canvas.addEventListener('pointerup', (e) => {
       };
       room.objects.push(newObj);
       persistState();
+      refreshEditorPanel();
       openObjectModal(newObj, room);
     }
   }
 });
 
-// Botões HUD e Topbar
+// Botões HUD, Zoom interno e Topbar
 document.getElementById('btnZoomIn').onclick = () => { cam.zoom *= 1.2; clampCamera(); };
 document.getElementById('btnZoomOut').onclick = () => { cam.zoom *= 0.83; clampCamera(); };
+document.querySelectorAll('.inner-zoom-in').forEach((btn) => {
+  btn.onclick = () => { innerCam.zoom *= 1.18; clampInnerCam(); };
+});
+document.querySelectorAll('.inner-zoom-out').forEach((btn) => {
+  btn.onclick = () => { innerCam.zoom *= 0.85; clampInnerCam(); };
+});
+document.querySelectorAll('.inner-zoom-reset').forEach((btn) => {
+  btn.onclick = () => resetInnerCam();
+});
+
+document.querySelectorAll('[data-quick-emote]').forEach((btn) => {
+  btn.onclick = () => {
+    const em = btn.dataset.quickEmote;
+    triggerEmote(em);
+    if (em.includes('Vem')) {
+      remotePeers.forEach((p) => {
+        if (p.id !== myPeerId) {
+          presenceConn?.broadcast('peer_ping', {
+            fromId: myPeerId,
+            fromName: myAvatar.name,
+            targetId: p.id,
+            location: getMyLocationPayload()
+          });
+        }
+      });
+      showToast('📣 Chamado enviado para os colegas online!');
+    }
+  };
+});
+
 document.getElementById('btnNewBuilding').onclick = openNewBuildingModal;
 document.getElementById('btnOpenIndex').onclick = openReceptionModal;
 document.getElementById('btnDecayConfig').onclick = () => {
@@ -1412,29 +1844,47 @@ btnMusic.onclick = () => {
 
 btnBack.onclick = () => {
   if (view.mode === 'room') {
+    setEditMode(false);
     view.mode = 'reception';
     updateTopbar();
+    pushMyPresenceNow(true);
     openReceptionModal();
   } else {
-    view = { mode: 'city', buildingId: null, floorId: null, apartmentId: null, roomId: null };
-    updateTopbar();
+    goHome();
   }
 };
 
 btnRonda.onclick = () => {
-  // Sugere o prédio mais antigo para ronda curta
   const sorted = [...state.buildings].sort((a, b) => new Date(a.lastReviewedAt) - new Date(b.lastReviewedAt));
   if (sorted.length > 0) enterBuilding(sorted[0].id);
 };
 
-btnToggleEdit.onclick = () => {
-  if (sharedRole === 'viewer') {
-    alert('Você entrou como Visitante neste mundo (somente leitura).');
-    return;
-  }
-  editMode = !editMode;
-  btnToggleEdit.textContent = `✏️ Modo Edição: ${editMode ? 'ON' : 'OFF'}`;
-  objectPaletteEl.classList.toggle('hidden', !editMode);
+btnToggleEdit.onclick = () => setEditMode(true);
+btnCloseEdit.onclick = () => setEditMode(false);
+btnExitEditTop.onclick = () => setEditMode(false);
+btnToggleDrawer.onclick = () => {
+  const collapsed = roomEditorPanel.classList.toggle('collapsed');
+  btnToggleDrawer.textContent = collapsed ? '▴' : '▾';
+};
+btnCancelMove.onclick = () => {
+  movingObjectId = null;
+  refreshEditorPanel();
+  updateEditorBanner();
+};
+
+document.querySelectorAll('.editor-tab').forEach((btn) => {
+  btn.onclick = () => setEditorTab(btn.dataset.editorTab);
+});
+
+btnRenameRoom.onclick = () => {
+  const room = getCurrentRoom();
+  const next = inpRenameRoom.value.trim();
+  if (!room || !next) return;
+  room.name = next;
+  persistState();
+  updateTopbar();
+  refreshEditorPanel();
+  showToast(`✏️ Cômodo renomeado para "${next}"`);
 };
 
 btnRoomRonda.onclick = () => {
@@ -1443,23 +1893,29 @@ btnRoomRonda.onclick = () => {
     b.lastReviewedAt = new Date().toISOString();
     state.rondasConcluidas = (state.rondasConcluidas || 0) + 1;
     persistState();
-    let msg = `Ronda concluída! O prédio "${b.name}" recuperou o vigor.`;
-    if (state.rondasConcluidas === 1) msg += '\n\n🏛️ O Prefeito inaugurou o MUSEU DA MEDICINA na cidade!';
-    if (state.rondasConcluidas === 3) msg += '\n\n🏡 O Prefeito inaugurou novas casas residenciais na cidade!';
-    if (state.rondasConcluidas === 5) msg += '\n\n🎣 Novo morador pescando no lago da Praça Central!';
-    alert(msg);
+    let msg = `🩺 Ronda concluída! "${b.name}" recuperou o vigor.`;
+    if (state.rondasConcluidas === 1) msg += ' 🏛️ O Prefeito inaugurou o MUSEU DA MEDICINA!';
+    if (state.rondasConcluidas === 3) msg += ' 🏡 O Prefeito inaugurou novas casas na cidade!';
+    if (state.rondasConcluidas === 5) msg += ' 🎣 Novo morador pescando na Praça Central!';
+    showToast(msg, '', null, 6000);
   }
 };
 
-// Paleta de objetos médicos
+// Catálogo visual com miniaturas ilustradas 2.5D
 OBJECT_CATALOG.forEach((item) => {
   const btn = document.createElement('button');
-  btn.className = `palette-item ${item.id === selectedPaletteType ? 'active' : ''}`;
-  btn.textContent = `${item.icon} ${item.name}`;
+  btn.className = `catalog-card ${item.id === selectedPaletteType ? 'active' : ''}`;
+  btn.innerHTML = `
+    <div class="catalog-thumb">
+      <img src="${item.thumb}" alt="${escapeHtml(item.shortName)}" loading="lazy" />
+    </div>
+    <span>${escapeHtml(item.shortName)}</span>
+  `;
   btn.onclick = () => {
     selectedPaletteType = item.id;
-    document.querySelectorAll('.palette-item').forEach((el) => el.classList.remove('active'));
+    document.querySelectorAll('.catalog-card').forEach((el) => el.classList.remove('active'));
     btn.classList.add('active');
+    updateEditorBanner();
   };
   objectPaletteEl.appendChild(btn);
 });
@@ -1506,7 +1962,7 @@ searchInput.addEventListener('input', () => {
     hits.slice(0, 12).forEach((h) => {
       const div = document.createElement('div');
       div.className = 'search-item';
-      div.innerHTML = `<strong>${h.label}</strong><small>${h.sub}</small>`;
+      div.innerHTML = `<strong>${escapeHtml(h.label)}</strong><small>${escapeHtml(h.sub)}</small>`;
       div.onclick = () => {
         searchResults.classList.add('hidden');
         searchInput.value = '';
@@ -1518,19 +1974,21 @@ searchInput.addEventListener('input', () => {
   searchResults.classList.remove('hidden');
 });
 
+// ---------------- NUVEM & CONEXÃO MULTIPLAYER DESACOPLADA ----------------
 let currentUser = null;
 let cloudStatus = 'offline';
 
-function persistState() {
+function persistState(skipBroadcast = false) {
   saveState(state);
-  if (presenceConn && sharedRole !== 'viewer') {
+  if (!skipBroadcast && presenceConn && sharedRole !== 'viewer') {
     presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
   }
-  if (currentUser && sharedRole !== 'viewer') {
-    const targetOwnerId = sharedWorldOwnerId || currentUser.id;
+  // Apenas o dono do mundo salva diretamente na linha do Supabase (editores sincronizam via broadcast -> dono salva)
+  const isOwnerOfCloudRow = currentUser && (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id);
+  if (isOwnerOfCloudRow) {
     cloudStatus = 'syncing';
     updateAccountButton();
-    saveCloudWorld(targetOwnerId, state)
+    saveCloudWorld(currentUser.id, state)
       .then(() => {
         cloudStatus = 'synced';
         updateAccountButton();
@@ -1557,83 +2015,145 @@ function updateAccountButton() {
   }
 }
 
+function connectMultiplayer(worldId) {
+  if (!worldId) return;
+  if (presenceConn && connectedWorldId === worldId) return;
+
+  if (presenceConn) presenceConn.leave();
+  connectedWorldId = worldId;
+
+  presenceConn = connectWorldPresence(worldId, getMyLocationPayload(), {
+    onStatusChange: (st) => {
+      multiplayerStatus = st;
+      renderOnlineBar();
+    },
+    onSubscribed: () => {
+      // Se entrou por link compartilhado (visitante ou editor), pede o snapshot ao vivo ao anfitrião
+      if (sharedWorldOwnerId && (!currentUser || sharedWorldOwnerId !== currentUser.id)) {
+        presenceConn.broadcast('world_request', { requesterId: myPeerId });
+      }
+    },
+    onPeersUpdate: (peers) => {
+      remotePeers = peers;
+      renderOnlineBar();
+    },
+    onBroadcast: (event, payload) => {
+      if (event === 'world_sync' && payload?.state && payload.senderId !== myPeerId) {
+        state = payload.state;
+        saveState(state);
+        updateTopbar();
+        // Se eu sou o dono logado e um editor alterou o quarto, salvo na nuvem automaticamente
+        if (currentUser && (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id)) {
+          persistState(true);
+        }
+      } else if (event === 'world_request' && payload?.requesterId !== myPeerId) {
+        // Anfitrião (ou qualquer editor com o mundo carregado) responde com o estado atual
+        if (!sharedWorldOwnerId || sharedRole === 'editor') {
+          presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
+        }
+      } else if (event === 'peer_join' && payload?.name) {
+        showToast(`👋 ${payload.name} entrou no mundo!`, 'Ir até lá', () => goToPeer(payload));
+      } else if (event === 'peer_emote' && payload?.emote && payload.id !== myPeerId) {
+        if (payload.targetPeerId === myPeerId) {
+          showToast(
+            `${payload.emote} ${payload.name || 'Colega'} interagiu com você!`,
+            'Ir até lá',
+            () => goToPeer(payload.location || remotePeers.find((p) => p.id === payload.id))
+          );
+        }
+      } else if (event === 'peer_ping' && payload?.fromId !== myPeerId) {
+        if (!payload.targetId || payload.targetId === myPeerId) {
+          const locText = formatPeerLocation(payload.location);
+          showToast(
+            `📣 ${payload.fromName || 'Colega'} está te chamando em ${locText}!`,
+            'Ir agora',
+            () => goToPeer(payload.location),
+            7000
+          );
+        }
+      }
+    }
+  });
+}
+
 async function initCloudSession() {
   try {
     currentUser = await getSessionUser();
-    const targetOwnerId = sharedWorldOwnerId || currentUser?.id;
+  } catch (err) {
+    console.warn('Falha ao verificar sessão:', err);
+  }
 
-    if (currentUser) {
-      const remote = await loadCloudWorld(targetOwnerId);
+  // 1. Tenta carregar/salvar mundo na nuvem (em bloco isolado para NUNCA derrubar o multiplayer!)
+  const cloudTargetOwner = sharedWorldOwnerId || currentUser?.id;
+  const looksLikeUuid = cloudTargetOwner && /^[0-9a-f-]{32,}$/i.test(cloudTargetOwner);
+
+  if (currentUser && looksLikeUuid) {
+    try {
+      const remote = await loadCloudWorld(cloudTargetOwner);
       if (remote && remote.data) {
         state = remote.data;
         saveState(state);
-      } else if (!sharedWorldOwnerId) {
+      } else if (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id) {
         await saveCloudWorld(currentUser.id, state);
       }
       cloudStatus = 'synced';
-    }
-
-    if (targetOwnerId) {
-      if (presenceConn) presenceConn.leave();
-      presenceConn = connectWorldPresence(
-        targetOwnerId,
-        {
-          id: myPeerId,
-          name: myAvatar.name,
-          color: myAvatar.color,
-          x: Math.round(player.x),
-          y: Math.round(player.y),
-          mode: view.mode,
-          buildingId: view.buildingId,
-          roomId: view.roomId,
-          emote: myEmote
-        },
-        (peers) => {
-          remotePeers = peers;
-          btnFriends.textContent = `👥 Amigos (${peers.length}/10)`;
-        },
-        (event, payload) => {
-          if (event === 'world_sync' && payload?.state && payload.senderId !== myPeerId) {
-            state = payload.state;
-            saveState(state);
-            updateTopbar();
-          } else if (event === 'world_request' && !sharedWorldOwnerId && currentUser) {
-            presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
-          }
-        }
-      );
-
-      // Se entrou por link compartilhado sem login, pede um snapshot ao vivo do dono se estiver online
-      if (sharedWorldOwnerId && !currentUser) {
-        setTimeout(() => {
-          if (presenceConn) presenceConn.broadcast('world_request', { requesterId: myPeerId });
-        }, 900);
+    } catch (err) {
+      console.warn('Nuvem indisponível ou política RLS pendente:', err);
+      if (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id) {
+        cloudStatus = 'error';
       }
     }
-  } catch (err) {
-    console.warn('Nuvem indisponível ou tabela não criada:', err);
-    if (currentUser) cloudStatus = 'error';
   }
+
+  // 2. Conecta ao Multiplayer Realtime SEMPRE (mesmo sem login, usando sala rápida ou ID da conta)
+  const activeWorldId = sharedWorldOwnerId || currentUser?.id || getOrCreateLocalWorldId();
+  connectMultiplayer(activeWorldId);
+
   updateAccountButton();
   updateTopbar();
+  renderOnlineBar();
 }
 
 function openFriendsModal() {
   const wrap = document.createElement('div');
-  const worldId = sharedWorldOwnerId || currentUser?.id;
+  const worldId = sharedWorldOwnerId || currentUser?.id || getOrCreateLocalWorldId();
   const base = `${window.location.origin}${window.location.pathname}`;
-  const viewerLink = worldId ? `${base}?world=${worldId}&role=viewer` : '';
-  const editorLink = worldId ? `${base}?world=${worldId}&role=editor` : '';
+  const viewerLink = `${base}?world=${worldId}&role=viewer`;
+  const editorLink = `${base}?world=${worldId}&role=editor`;
   const others = remotePeers.filter((p) => p.id !== myPeerId);
+
+  const statusText =
+    multiplayerStatus === 'connected'
+      ? '🟢 Conectado em tempo real'
+      : multiplayerStatus === 'connecting'
+        ? '🟡 Conectando ao servidor...'
+        : '🔴 Desconectado (clique em Reconectar)';
 
   wrap.innerHTML = `
     <div class="card-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong>Status do Multiplayer</strong>
+        <span style="font-size:12px;">${statusText}</span>
+      </div>
+      ${
+        multiplayerStatus !== 'connected'
+          ? '<button id="btnReconnectMp" class="btn-secondary btn-sm" style="align-self:flex-start;">🔄 Reconectar agora</button>'
+          : ''
+      }
+      ${
+        !currentUser && !sharedWorldOwnerId
+          ? '<small style="color:var(--muted)">Modo Sala Rápida ativo (funciona sem login enquanto sua aba estiver aberta; para salvar na nuvem entre em ☁️ Entrar).</small>'
+          : ''
+      }
+    </div>
+
+    <div class="card-box">
       <strong>Seu Avatar & Aceno Rápido</strong>
       <div style="display:flex;gap:8px;align-items:center;">
-        <div class="field" style="flex:2;"><label>Nome</label><input id="avName" value="${myAvatar.name}" maxlength="12" /></div>
+        <div class="field" style="flex:2;"><label>Nome</label><input id="avName" value="${escapeHtml(myAvatar.name)}" maxlength="12" /></div>
         <div class="field" style="flex:1;"><label>Cor</label><input id="avColor" type="color" value="${myAvatar.color}" style="height:36px;" /></div>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+      <div class="row-actions" style="margin-top:4px;">
         <button id="btnSaveAvatar" class="btn-primary">Salvar Avatar</button>
         <button class="btn-ghost" data-emote="👋">👋 Acenar</button>
         <button class="btn-ghost" data-emote="💡">💡 Entendi!</button>
@@ -1642,20 +2162,23 @@ function openFriendsModal() {
     </div>
 
     <div class="card-box">
-      <strong>Online Agora (${remotePeers.length || 1}/10)</strong>
-      <div id="peersList" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+      <strong>Online Agora (${others.length + 1}/10)</strong>
+      <div id="peersList" style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
         ${
           others.length === 0
-            ? '<p style="font-size:12px;color:var(--muted)">Nenhum outro colega conectado neste momento. Envie o link abaixo para entrarem juntos!</p>'
+            ? '<p style="font-size:12px;color:var(--muted)">Nenhum outro colega conectado neste momento. Copie um dos links abaixo e envie para entrarem juntos!</p>'
             : others
                 .map(
                   (p) => `
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;background:rgba(15,23,42,0.4);border-radius:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 9px;background:rgba(30,41,59,0.75);border-radius:10px;">
             <div>
-              <strong>${p.name || 'Amigo'}</strong>
-              <div style="font-size:11px;color:var(--muted)">📍 ${formatPeerLocation(p)}</div>
+              <strong>${escapeHtml(p.name || 'Amigo')}</strong>
+              <div style="font-size:11px;color:var(--muted)">📍 ${escapeHtml(formatPeerLocation(p))}</div>
             </div>
-            <button class="btn-primary" data-go-peer="${p.id}" style="padding:4px 10px;font-size:12px;">Ir até lá</button>
+            <div style="display:flex;gap:5px;">
+              <button class="btn-secondary btn-sm" data-call-peer="${p.id}">📣 Chamar</button>
+              <button class="btn-primary btn-sm" data-go-peer="${p.id}">📍 Ir</button>
+            </div>
           </div>`
                 )
                 .join('')
@@ -1664,30 +2187,34 @@ function openFriendsModal() {
     </div>
 
     <div class="card-box">
-      <strong>Convites (até 10 pessoas • sem chat)</strong>
-      ${
-        !worldId
-          ? '<p style="color:var(--warn);font-size:13px;">Entre na sua conta em <strong>☁️ Entrar</strong> primeiro para gerar links do seu mundo.</p>'
-          : `
-        <div class="field">
-          <label>Link de Visitante (só assiste e revisa)</label>
-          <div style="display:flex;gap:6px;">
-            <input id="inpViewerLink" readonly value="${viewerLink}" onclick="this.select()" />
-            <button class="btn-ghost" id="btnCopyViewer">Copiar</button>
-          </div>
+      <strong>Convites (até 10 pessoas • sem chat livre)</strong>
+      <div class="field">
+        <label>Link de Visitante (só assiste, anda e revisa)</label>
+        <div style="display:flex;gap:6px;">
+          <input id="inpViewerLink" readonly value="${viewerLink}" onclick="this.select()" />
+          <button class="btn-ghost" id="btnCopyViewer">Copiar</button>
         </div>
-        <div class="field">
-          <label>Link de Editor (pode editar os quartos junto)</label>
-          <div style="display:flex;gap:6px;">
-            <input id="inpEditorLink" readonly value="${editorLink}" onclick="this.select()" />
-            <button class="btn-ghost" id="btnCopyEditor">Copiar</button>
-          </div>
+      </div>
+      <div class="field">
+        <label>Link de Editor (pode editar os quartos junto ao vivo)</label>
+        <div style="display:flex;gap:6px;">
+          <input id="inpEditorLink" readonly value="${editorLink}" onclick="this.select()" />
+          <button class="btn-ghost" id="btnCopyEditor">Copiar</button>
         </div>
-      `
-      }
+      </div>
     </div>
   `;
   openModal('👥 Mundo Compartilhado', wrap);
+
+  const btnReconnect = document.getElementById('btnReconnectMp');
+  if (btnReconnect) {
+    btnReconnect.onclick = () => {
+      connectedWorldId = null;
+      connectMultiplayer(worldId);
+      closeModal();
+      showToast('🔄 Reconectando ao multiplayer...');
+    };
+  }
 
   wrap.querySelectorAll('[data-emote]').forEach((btn) => {
     btn.onclick = () => {
@@ -1704,20 +2231,22 @@ function openFriendsModal() {
     };
   });
 
-  const btnCopyViewer = document.getElementById('btnCopyViewer');
-  if (btnCopyViewer) {
-    btnCopyViewer.onclick = () => {
-      navigator.clipboard?.writeText(viewerLink);
-      btnCopyViewer.textContent = 'Copiado!';
+  wrap.querySelectorAll('[data-call-peer]').forEach((btn) => {
+    btn.onclick = () => {
+      const peer = others.find((p) => p.id === btn.dataset.callPeer);
+      closeModal();
+      if (peer) callPeerHere(peer);
     };
-  }
-  const btnCopyEditor = document.getElementById('btnCopyEditor');
-  if (btnCopyEditor) {
-    btnCopyEditor.onclick = () => {
-      navigator.clipboard?.writeText(editorLink);
-      btnCopyEditor.textContent = 'Copiado!';
-    };
-  }
+  });
+
+  document.getElementById('btnCopyViewer').onclick = (e) => {
+    navigator.clipboard?.writeText(viewerLink);
+    e.target.textContent = 'Copiado!';
+  };
+  document.getElementById('btnCopyEditor').onclick = (e) => {
+    navigator.clipboard?.writeText(editorLink);
+    e.target.textContent = 'Copiado!';
+  };
 
   document.getElementById('btnSaveAvatar').onclick = () => {
     myAvatar = {
@@ -1725,16 +2254,9 @@ function openFriendsModal() {
       color: document.getElementById('avColor').value
     };
     localStorage.setItem('palacio_avatar_v1', JSON.stringify(myAvatar));
-    if (presenceConn) {
-      presenceConn.updatePosition({
-        name: myAvatar.name,
-        color: myAvatar.color,
-        x: Math.round(player.x),
-        y: Math.round(player.y),
-        mode: view.mode
-      });
-    }
+    pushMyPresenceNow(true);
     closeModal();
+    showToast(`✅ Avatar atualizado para "${myAvatar.name}"`);
   };
 }
 
@@ -1745,7 +2267,7 @@ function openAccountModal() {
   if (currentUser) {
     wrap.innerHTML = `
       <div class="card-box">
-        <p>Logado como: <strong>${currentUser.email}</strong></p>
+        <p>Logado como: <strong>${escapeHtml(currentUser.email)}</strong></p>
         <p style="font-size:12px;color:var(--muted)">Status da nuvem: <strong>${cloudStatus === 'synced' ? 'Sincronizado' : cloudStatus === 'error' ? 'Erro (verifique se rodou o SQL no Supabase)' : 'Sincronizando...'}</strong></p>
       </div>
       <div class="row-actions">
@@ -1760,6 +2282,7 @@ function openAccountModal() {
         cloudStatus = 'synced';
         updateAccountButton();
         closeModal();
+        showToast('☁️ Mundo sincronizado com a nuvem!');
       } catch (e) {
         alert('Erro ao sincronizar: ' + (e.message || e));
       }

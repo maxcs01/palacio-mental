@@ -1,14 +1,114 @@
-// Catálogo reutilizável de objetos médicos em pixel art
+// Catálogo reutilizável de objetos médicos ilustrados 2.5D
 export const OBJECT_CATALOG = [
-  { id: 'xray', name: 'Máquina de Radiografia', icon: '🩻' },
-  { id: 'ct', name: 'Tomógrafo', icon: '🌀' },
-  { id: 'blood', name: 'Tubos de Sangue (Lab)', icon: '🧪' },
-  { id: 'ausculta', name: 'Ausculta Pulmonar', icon: '🩺' },
-  { id: 'monitor', name: 'Monitor Cardíaco', icon: '📈' },
-  { id: 'meds', name: 'Bomba / Medicação', icon: '💊' },
-  { id: 'bed', name: 'Leito / Maca', icon: '🛏️' },
-  { id: 'book', name: 'Prontuário / Livro', icon: '📘' },
-  { id: 'pdf', name: 'Arquivo PDF / Fonte', icon: '📄' }
+  { id: 'bed', name: 'Leito / Maca', shortName: 'Leito', icon: '🛏️', thumb: '/assets/bed.jpg' },
+  { id: 'monitor', name: 'Monitor Cardíaco', shortName: 'Monitor', icon: '📈', thumb: '/assets/monitor.jpg' },
+  { id: 'xray', name: 'Máquina de Radiografia', shortName: 'Raio-X', icon: '🩻', thumb: '/assets/xray.jpg' },
+  { id: 'ct', name: 'Tomógrafo', shortName: 'Tomógrafo', icon: '🌀', thumb: '/assets/ct.jpg' },
+  { id: 'blood', name: 'Tubos de Sangue (Lab)', shortName: 'Lab / Sangue', icon: '🧪', thumb: '/assets/blood.jpg' },
+  { id: 'ausculta', name: 'Ausculta / Poltrona', shortName: 'Ausculta', icon: '🩺', thumb: '/assets/ausculta.jpg' },
+  { id: 'meds', name: 'Carrinho de Medicação', shortName: 'Medicação', icon: '💊', thumb: '/assets/meds.jpg' },
+  { id: 'book', name: 'Criado-mudo / Livro', shortName: 'Livro', icon: '📘', thumb: '/assets/book.jpg' },
+  { id: 'pdf', name: 'Arquivo / Prontuário', shortName: 'Arquivo PDF', icon: '📄', thumb: '/assets/pdf.jpg' }
+];
+
+// Temas ilustrados para os quartos (combinam com os sprites 2.5D)
+export const ROOM_THEMES = [
+  {
+    id: 'clinic',
+    name: 'Clínica Clássica',
+    desc: 'Creme, verde-oliva e piso cerâmico',
+    swatch: ['#f2ead8', '#667f5e', '#e7dfd0'],
+    wallLeft: '#f2ead8',
+    wallLeftShade: '#e5dbc5',
+    wallRight: '#e3d9c4',
+    wallRightShade: '#d3c7b0',
+    wallTop: '#faf5e8',
+    wainscotLeft: '#6a8362',
+    wainscotRight: '#556b4e',
+    railColor: '#f7f1e3',
+    baseboardLeft: '#7c5d41',
+    baseboardRight: '#634831',
+    floorA: '#f2ece0',
+    floorB: '#e8e0cf',
+    floorGrout: 'rgba(110, 96, 78, 0.24)',
+    floorStyle: 'ceramic',
+    slabLeft: '#9c7c5c',
+    slabRight: '#7d6045',
+    bgTop: '#1d2636',
+    bgBottom: '#111827'
+  },
+  {
+    id: 'wood',
+    name: 'Consultório Madeira',
+    desc: 'Paredes marfim e assoalho amadeirado',
+    swatch: ['#f5f0e4', '#b88758', '#d4a373'],
+    wallLeft: '#f6f1e6',
+    wallLeftShade: '#e9e1d2',
+    wallRight: '#e7dfd0',
+    wallRightShade: '#d9cfbd',
+    wallTop: '#fcf9f2',
+    wainscotLeft: '#b9895b',
+    wainscotRight: '#9c6f46',
+    railColor: '#f5ead6',
+    baseboardLeft: '#6e4b2e',
+    baseboardRight: '#563921',
+    floorA: '#d9ac7c',
+    floorB: '#cfa06e',
+    floorGrout: 'rgba(92, 58, 28, 0.28)',
+    floorStyle: 'wood',
+    slabLeft: '#875c38',
+    slabRight: '#6b472a',
+    bgTop: '#242029',
+    bgBottom: '#141219'
+  },
+  {
+    id: 'icu',
+    name: 'Diagnóstico / UTI',
+    desc: 'Azul-aço suave e porcelanato clínico',
+    swatch: ['#edf3f7', '#5a7a96', '#dce7ef'],
+    wallLeft: '#eef3f7',
+    wallLeftShade: '#dfe8ef',
+    wallRight: '#dce6ee',
+    wallRightShade: '#cbd8e3',
+    wallTop: '#f8fbfd',
+    wainscotLeft: '#6384a0',
+    wainscotRight: '#4d6c86',
+    railColor: '#f3f7fa',
+    baseboardLeft: '#4a5c6d',
+    baseboardRight: '#384754',
+    floorA: '#ebf1f5',
+    floorB: '#dfe8ee',
+    floorGrout: 'rgba(71, 95, 117, 0.22)',
+    floorStyle: 'ceramic',
+    slabLeft: '#667b8e',
+    slabRight: '#4e6070',
+    bgTop: '#172333',
+    bgBottom: '#0e1726'
+  },
+  {
+    id: 'library',
+    name: 'Biblioteca Médica',
+    desc: 'Pergaminho quente e madeira nobre',
+    swatch: ['#efe3cd', '#7d573a', '#be8c5c'],
+    wallLeft: '#efe3cd',
+    wallLeftShade: '#e1d1b4',
+    wallRight: '#dfcfb2',
+    wallRightShade: '#cfbc9a',
+    wallTop: '#f7efe0',
+    wainscotLeft: '#7e593d',
+    wainscotRight: '#66462e',
+    railColor: '#d9b88c',
+    baseboardLeft: '#4e331f',
+    baseboardRight: '#3c2616',
+    floorA: '#c39162',
+    floorB: '#b58253',
+    floorGrout: 'rgba(72, 43, 20, 0.30)',
+    floorStyle: 'wood',
+    slabLeft: '#6c492d',
+    slabRight: '#523620',
+    bgTop: '#231e1c',
+    bgBottom: '#141110'
+  }
 ];
 
 // Lotes disponíveis na cidade para criar novos prédios
@@ -58,6 +158,7 @@ export function createInitialState() {
                   {
                     id: 'r-ic-def',
                     name: 'Definição',
+                    theme: 'clinic',
                     objects: [
                       {
                         id: 'o-ic-1',
@@ -75,6 +176,7 @@ export function createInitialState() {
                   {
                     id: 'r-ic-aguda',
                     name: 'Quarto da IC Aguda',
+                    theme: 'icu',
                     objects: [
                       {
                         id: 'o-ic-2',
@@ -92,6 +194,7 @@ export function createInitialState() {
                   {
                     id: 'r-ic-cronica',
                     name: 'Quarto da IC Crônica',
+                    theme: 'wood',
                     objects: [
                       {
                         id: 'o-ic-3',
@@ -109,6 +212,7 @@ export function createInitialState() {
                   {
                     id: 'r-ic-bib',
                     name: 'Bibliografia',
+                    theme: 'library',
                     isBibliography: true,
                     pdfs: [
                       {
@@ -135,6 +239,7 @@ export function createInitialState() {
                   {
                     id: 'r-endo-diag',
                     name: 'Diagnóstico',
+                    theme: 'clinic',
                     objects: [
                       {
                         id: 'o-endo-1',
@@ -149,7 +254,7 @@ export function createInitialState() {
                       }
                     ]
                   },
-                  { id: 'r-endo-bib', name: 'Bibliografia', isBibliography: true, pdfs: [], objects: [] }
+                  { id: 'r-endo-bib', name: 'Bibliografia', theme: 'library', isBibliography: true, pdfs: [], objects: [] }
                 ]
               }
             ]
@@ -171,12 +276,13 @@ export function createInitialState() {
                 id: 'a-pnm',
                 name: 'Pneumonia (PAC)',
                 rooms: [
-                  { id: 'r-pnm-def', name: 'Definição', objects: [] },
-                  { id: 'r-pnm-epi', name: 'Epidemiologia', objects: [] },
-                  { id: 'r-pnm-risco', name: 'Fatores de Risco', objects: [] },
+                  { id: 'r-pnm-def', name: 'Definição', theme: 'clinic', objects: [] },
+                  { id: 'r-pnm-epi', name: 'Epidemiologia', theme: 'clinic', objects: [] },
+                  { id: 'r-pnm-risco', name: 'Fatores de Risco', theme: 'clinic', objects: [] },
                   {
                     id: 'r-pnm-diag',
                     name: 'Diagnóstico',
+                    theme: 'clinic',
                     objects: [
                       {
                         id: 'o-pnm-rx',
@@ -213,8 +319,8 @@ export function createInitialState() {
                       }
                     ]
                   },
-                  { id: 'r-pnm-tto', name: 'Tratamento', objects: [] },
-                  { id: 'r-pnm-bib', name: 'Bibliografia', isBibliography: true, pdfs: [], objects: [] }
+                  { id: 'r-pnm-tto', name: 'Tratamento', theme: 'clinic', objects: [] },
+                  { id: 'r-pnm-bib', name: 'Bibliografia', theme: 'library', isBibliography: true, pdfs: [], objects: [] }
                 ]
               }
             ]
@@ -239,6 +345,7 @@ export function createInitialState() {
                   {
                     id: 'r-avc-diag',
                     name: 'Diagnóstico',
+                    theme: 'icu',
                     objects: [
                       {
                         id: 'o-avc-ct',
@@ -253,7 +360,7 @@ export function createInitialState() {
                       }
                     ]
                   },
-                  { id: 'r-avc-bib', name: 'Bibliografia', isBibliography: true, pdfs: [], objects: [] }
+                  { id: 'r-avc-bib', name: 'Bibliografia', theme: 'library', isBibliography: true, pdfs: [], objects: [] }
                 ]
               }
             ]
