@@ -87,6 +87,22 @@ export const SPRITE_URLS = {
   screen: '/assets/screen.jpg',
   plant: '/assets/plant.jpg',
   trophy: '/assets/trophy.jpg',
+  tb_bacilos: '/assets/tb_bacilos.png',
+  tb_microscopio: '/assets/tb_microscopio.png',
+  tb_rif: '/assets/tb_rif.png',
+  tb_inh: '/assets/tb_inh.png',
+  tb_pza_emb: '/assets/tb_pza_emb.png',
+  tb_emb_caixa: '/assets/tb_emb_caixa.png',
+  tb_bacterias: '/assets/tb_bacterias.png',
+  tb_raiox: '/assets/tb_raiox.png',
+  tb_ltmp: '/assets/tb_ltmp.png',
+  tb_mascara_cirurgica: '/assets/tb_mascara_cirurgica.png',
+  tb_mascara_n95: '/assets/tb_mascara_n95.png',
+  tb_pulmao: '/assets/tb_pulmao.png',
+  tb_ppd: '/assets/tb_ppd.png',
+  tb_esputo: '/assets/tb_esputo.png',
+  tb_bcg: '/assets/tb_bcg.png',
+  tb_cartilha: '/assets/tb_cartilha.png',
   city_hospital: '/assets/city-hospital.jpg',
   city_museum: '/assets/city-museum.jpg',
   city_house: '/assets/city-house.jpg',
@@ -113,7 +129,23 @@ const SPRITE_TUNING = {
   whiteboard: { scale: 1.32, yLift: 0.22, shadowRx: 0.34, shadowRy: 0.17 },
   screen: { scale: 1.36, yLift: 0.24, shadowRx: 0.38, shadowRy: 0.18 },
   plant: { scale: 1.14, yLift: 0.20, shadowRx: 0.26, shadowRy: 0.13 },
-  trophy: { scale: 1.16, yLift: 0.20, shadowRx: 0.28, shadowRy: 0.14 }
+  trophy: { scale: 1.16, yLift: 0.20, shadowRx: 0.28, shadowRy: 0.14 },
+  tb_bacilos: { scale: 1.25, yLift: 0.22, shadowRx: 0.36, shadowRy: 0.18 },
+  tb_microscopio: { scale: 1.28, yLift: 0.22, shadowRx: 0.36, shadowRy: 0.18 },
+  tb_rif: { scale: 1.30, yLift: 0.24, shadowRx: 0.38, shadowRy: 0.19 },
+  tb_inh: { scale: 1.15, yLift: 0.20, shadowRx: 0.26, shadowRy: 0.13 },
+  tb_pza_emb: { scale: 1.30, yLift: 0.24, shadowRx: 0.38, shadowRy: 0.19 },
+  tb_emb_caixa: { scale: 1.18, yLift: 0.22, shadowRx: 0.28, shadowRy: 0.14 },
+  tb_bacterias: { scale: 1.32, yLift: 0.20, shadowRx: 0.40, shadowRy: 0.20 },
+  tb_raiox: { scale: 1.25, yLift: 0.22, shadowRx: 0.34, shadowRy: 0.17 },
+  tb_ltmp: { scale: 1.25, yLift: 0.22, shadowRx: 0.36, shadowRy: 0.18 },
+  tb_mascara_cirurgica: { scale: 1.18, yLift: 0.20, shadowRx: 0.30, shadowRy: 0.15 },
+  tb_mascara_n95: { scale: 1.18, yLift: 0.20, shadowRx: 0.28, shadowRy: 0.14 },
+  tb_pulmao: { scale: 1.35, yLift: 0.24, shadowRx: 0.40, shadowRy: 0.20 },
+  tb_ppd: { scale: 1.35, yLift: 0.24, shadowRx: 0.42, shadowRy: 0.21 },
+  tb_esputo: { scale: 1.25, yLift: 0.22, shadowRx: 0.36, shadowRy: 0.18 },
+  tb_bcg: { scale: 1.20, yLift: 0.22, shadowRx: 0.30, shadowRy: 0.15 },
+  tb_cartilha: { scale: 1.18, yLift: 0.20, shadowRx: 0.26, shadowRy: 0.13 }
 };
 
 const spriteCache = {};
@@ -259,7 +291,11 @@ Object.entries(SPRITE_URLS).forEach(([key, url]) => {
   const img = new Image();
   img.onload = () => {
     try {
-      spriteCache[key] = processIllustratedSprite(img, CITY_SPRITE_KEYS.has(key));
+      if (url.endsWith('.png')) {
+        spriteCache[key] = img;
+      } else {
+        spriteCache[key] = processIllustratedSprite(img, CITY_SPRITE_KEYS.has(key));
+      }
     } catch {
       spriteCache[key] = img;
     }

@@ -17,7 +17,23 @@ export const OBJECT_CATALOG = [
   { id: 'whiteboard', name: 'Quadro Branco Clínico', shortName: 'Quadro', icon: '🧑‍🏫', thumb: '/assets/whiteboard.jpg' },
   { id: 'screen', name: 'Biombo Hospitalar', shortName: 'Biombo', icon: '🪟', thumb: '/assets/screen.jpg' },
   { id: 'plant', name: 'Vaso com Planta', shortName: 'Planta', icon: '🪴', thumb: '/assets/plant.jpg' },
-  { id: 'trophy', name: 'Troféu / Símbolo Mnemônico', shortName: 'Troféu', icon: '🏆', thumb: '/assets/trophy.jpg' }
+  { id: 'trophy', name: 'Troféu / Símbolo Mnemônico', shortName: 'Troféu', icon: '🏆', thumb: '/assets/trophy.jpg' },
+  { id: 'tb_bacilos', name: 'M. tuberculosis (Bacilos)', shortName: 'Bacilos TBC', icon: '🦠', thumb: '/assets/tb_bacilos.png' },
+  { id: 'tb_microscopio', name: 'Microscópio Ziehl-Neelsen', shortName: 'Microscopia', icon: '🔬', thumb: '/assets/tb_microscopio.png' },
+  { id: 'tb_rif', name: 'Rifampicina (RIF) + Blister', shortName: 'Rifampicina', icon: '💊', thumb: '/assets/tb_rif.png' },
+  { id: 'tb_inh', name: 'Isoniazida (INH) Frasco', shortName: 'Isoniazida', icon: '💊', thumb: '/assets/tb_inh.png' },
+  { id: 'tb_pza_emb', name: 'Pirazinamida + Etambutol (PZA/EMB)', shortName: 'PZA & EMB', icon: '💊', thumb: '/assets/tb_pza_emb.png' },
+  { id: 'tb_emb_caixa', name: 'Etambutol (EMB) Caixa', shortName: 'Etambutol', icon: '📦', thumb: '/assets/tb_emb_caixa.png' },
+  { id: 'tb_bacterias', name: 'Cultura em Placa de Petri', shortName: 'Cultura', icon: '🧫', thumb: '/assets/tb_bacterias.png' },
+  { id: 'tb_raiox', name: 'Negatoscópio Raio-X de Tórax', shortName: 'Raio-X Tórax', icon: '🩻', thumb: '/assets/tb_raiox.png' },
+  { id: 'tb_ltmp', name: 'LTMP / Toxina e Gotícula', shortName: 'LTMP / Gota', icon: '💧', thumb: '/assets/tb_ltmp.png' },
+  { id: 'tb_mascara_cirurgica', name: 'Máscara Cirúrgica Protetora', shortName: 'Máscara Cirúrgica', icon: '😷', thumb: '/assets/tb_mascara_cirurgica.png' },
+  { id: 'tb_mascara_n95', name: 'Máscara N95 / PFF2 (Respirador)', shortName: 'Máscara N95', icon: '😷', thumb: '/assets/tb_mascara_n95.png' },
+  { id: 'tb_pulmao', name: 'Pulmão Cavernoso + Estetoscópio', shortName: 'Pulmão TBC', icon: '🫁', thumb: '/assets/tb_pulmao.png' },
+  { id: 'tb_ppd', name: 'PPD / Mantoux (Pápula e Seringa)', shortName: 'Teste PPD', icon: '💉', thumb: '/assets/tb_ppd.png' },
+  { id: 'tb_esputo', name: 'Potes de Escarro (Baciloscopia)', shortName: 'Escarro / Esputo', icon: '🧪', thumb: '/assets/tb_esputo.png' },
+  { id: 'tb_bcg', name: 'Vacina BCG + Seringa', shortName: 'Vacina BCG', icon: '💉', thumb: '/assets/tb_bcg.png' },
+  { id: 'tb_cartilha', name: 'Cartilha / Manual TBC', shortName: 'Cartilha TBC', icon: '📖', thumb: '/assets/tb_cartilha.png' }
 ];
 
 export function getAllCatalogItems(state) {
@@ -420,6 +436,176 @@ export function createInitialState() {
                   },
                   { id: 'r-pnm-tto', name: 'Tratamento', theme: 'clinic', objects: [] },
                   { id: 'r-pnm-bib', name: 'Bibliografia', theme: 'library', isBibliography: true, pdfs: [], objects: [] }
+                ]
+              },
+              {
+                id: 'a-tb',
+                name: 'Tuberculose Pulmonar (TBC)',
+                rooms: [
+                  {
+                    id: 'r-tb-agente',
+                    name: 'Agente & Fisiopatologia',
+                    theme: 'clinic',
+                    objects: [
+                      {
+                        id: 'o-tb-bac',
+                        type: 'tb_bacilos',
+                        gx: 2,
+                        gy: 2,
+                        title: 'Mycobacterium tuberculosis (Bacilo de Koch)',
+                        summary: 'Bacilo álcool-ácido resistente (BAAR), aeróbio estrito, parede rica em ácidos micólicos. Transmissão aérea por aerossóis (núcleos de Wells).',
+                        pdfLabel: 'Manual TBC MS — Pág. 14',
+                        pdfUrl: '',
+                        pdfPage: 14
+                      },
+                      {
+                        id: 'o-tb-pulm',
+                        type: 'tb_pulmao',
+                        gx: 5,
+                        gy: 3,
+                        title: 'Lesão Cavitária Apical',
+                        summary: 'Reativação pós-primária clássica no ápice/segmento posterior dos lobos superiores (alta PaO₂). Necrose caseosa, cavitação e tosse crônica com escarro.',
+                        pdfLabel: 'Pneumologia TBC — Pág. 32',
+                        pdfUrl: '',
+                        pdfPage: 32
+                      }
+                    ]
+                  },
+                  {
+                    id: 'r-tb-diag',
+                    name: 'Diagnóstico & Exames',
+                    theme: 'clinic',
+                    objects: [
+                      {
+                        id: 'o-tb-rx',
+                        type: 'tb_raiox',
+                        gx: 2,
+                        gy: 2,
+                        title: 'Radiografia de Tórax (RX)',
+                        summary: 'Infiltrados e cavitações em ápices pulmonares. Exame de imagem padrão para triagem, avaliação de gravidade e evolução.',
+                        pdfLabel: 'Pneumologia — Pág. 45',
+                        pdfUrl: '',
+                        pdfPage: 45
+                      },
+                      {
+                        id: 'o-tb-esp',
+                        type: 'tb_esputo',
+                        gx: 4,
+                        gy: 2,
+                        title: 'Baciloscopia & TRM-TB (GeneXpert)',
+                        summary: 'Baciloscopia direta (Ziehl-Neelsen, 2 amostras) e TRM-TB (resultado em 2h + detecta resistência à Rifampicina).',
+                        pdfLabel: 'Diretrizes MS — Pág. 58',
+                        pdfUrl: '',
+                        pdfPage: 58
+                      },
+                      {
+                        id: 'o-tb-ppd',
+                        type: 'tb_ppd',
+                        gx: 2,
+                        gy: 4,
+                        title: 'Teste Tuberculínico (PPD / Mantoux)',
+                        summary: 'Avalia infecção latente (ILTB). Leitura após 48-72h medindo o maior diâmetro transverso da enduração (≥ 5 mm é positivo no Brasil).',
+                        pdfLabel: 'Manual ILTB — Pág. 20',
+                        pdfUrl: '',
+                        pdfPage: 20
+                      },
+                      {
+                        id: 'o-tb-mic',
+                        type: 'tb_microscopio',
+                        gx: 5,
+                        gy: 4,
+                        title: 'Microscopia Ziehl-Neelsen & Cultura',
+                        summary: 'Coloração Ziehl-Neelsen revela bacilos fúcsia/rosas. Cultura em meio Lowenstein-Jensen é o padrão-ouro com teste de sensibilidade.',
+                        pdfLabel: 'Microbiologia Clínica — Pág. 77',
+                        pdfUrl: '',
+                        pdfPage: 77
+                      }
+                    ]
+                  },
+                  {
+                    id: 'r-tb-tto',
+                    name: 'Tratamento (Esquema RIPE)',
+                    theme: 'wood',
+                    objects: [
+                      {
+                        id: 'o-tb-rif',
+                        type: 'tb_rif',
+                        gx: 2,
+                        gy: 2,
+                        title: 'Rifampicina (RIF) — 2RHZE / 4RH',
+                        summary: 'Bactericida potente, inibe RNA-polimerase. Efeitos: urina e secreções alaranjadas, hepatotoxicidade e indução forte do citocromo CYP450.',
+                        pdfLabel: 'Farmacologia TBC — Pág. 110',
+                        pdfUrl: '',
+                        pdfPage: 110
+                      },
+                      {
+                        id: 'o-tb-inh',
+                        type: 'tb_inh',
+                        gx: 4,
+                        gy: 2,
+                        title: 'Isoniazida (INH)',
+                        summary: 'Inibe síntese de ácidos micólicos. Efeitos adversos: neuropatia periférica (prevenida com Vitamina B6 / Piridoxina) e hepatite.',
+                        pdfLabel: 'Farmacologia TBC — Pág. 114',
+                        pdfUrl: '',
+                        pdfPage: 114
+                      },
+                      {
+                        id: 'o-tb-pza',
+                        type: 'tb_pza_emb',
+                        gx: 3,
+                        gy: 4,
+                        title: 'Pirazinamida (PZA) & Etambutol (EMB)',
+                        summary: 'PZA age no ambiente ácido intracelular (hiperuricemia/gota). EMB inibe arabinosiltransferase (neurite óptica retrobulbar — perda de visão de cores).',
+                        pdfLabel: 'Manual MS TBC — Pág. 85',
+                        pdfUrl: '',
+                        pdfPage: 85
+                      }
+                    ]
+                  },
+                  {
+                    id: 'r-tb-prev',
+                    name: 'Prevenção & Biossegurança',
+                    theme: 'icu',
+                    objects: [
+                      {
+                        id: 'o-tb-n95',
+                        type: 'tb_mascara_n95',
+                        gx: 2,
+                        gy: 3,
+                        title: 'Máscara N95 / PFF2 (Precaução por Aerossóis)',
+                        summary: 'Profissionais de saúde devem usar máscara N95/PFF2 ao atender paciente bacilífero em isolamento respiratório. Paciente usa cirúrgica no transporte.',
+                        pdfLabel: 'Controle de Infecção — Pág. 15',
+                        pdfUrl: '',
+                        pdfPage: 15
+                      },
+                      {
+                        id: 'o-tb-bcg',
+                        type: 'tb_bcg',
+                        gx: 4,
+                        gy: 3,
+                        title: 'Vacina BCG (Bacilo de Calmette-Guérin)',
+                        summary: 'Dose única ao nascer (intradérmica no braço direito). Previne formas graves e disseminadas (meningite tuberculosa e TB miliar).',
+                        pdfLabel: 'PNI Calendário Vacinal — Pág. 6',
+                        pdfUrl: '',
+                        pdfPage: 6
+                      }
+                    ]
+                  },
+                  {
+                    id: 'r-tb-bib',
+                    name: 'Bibliografia',
+                    theme: 'library',
+                    isBibliography: true,
+                    pdfs: [
+                      {
+                        id: 'pdf-tb-1',
+                        name: 'Manual de Recomendações para o Controle da Tuberculose no Brasil (Ministério da Saúde)',
+                        sourceType: 'link',
+                        url: 'https://www.gov.br/saude/pt-br'
+                      }
+                    ],
+                    objects: []
+                  }
                 ]
               }
             ]
