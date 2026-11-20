@@ -78,6 +78,7 @@ function clampInnerCam() {
 
 // Jogador e entidades vivas
 const player = { x: 12 * TILE, y: 9.5 * TILE, targetX: null, targetY: null, speed: 150 };
+const roomPlayer = { gx: 3.5, gy: 4.5, targetGx: null, targetGy: null, speed: 3.2 };
 const keys = {};
 
 const cars = [
@@ -953,11 +954,47 @@ function renderRoom() {
     }
   }
 
-  // Objetos ordenados por profundidade (gx + gy) para sobreposição natural
-  const sorted = [...room.objects].sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy));
-  sorted.forEach((obj) => {
-    const center = isoToScreen(obj.gx + 0.5, obj.gy + 0.5, originX, originY, tileW, tileH);
-    drawRoomObject(ctx, obj.type, center.x, center.y, tileW, editMode);
+  // Objetos e avatares ordenados por profundidade (gx + gy) para sobreposição natural
+  const renderables = room.objects.map((obj) => ({
+    kind: 'object',
+    depth: obj.gx + obj.gy,
+    gx: obj.gx + 0.5,
+    gy: obj.gy + 0.5,
+    obj
+  }));
+
+  renderables.push({
+    kind: 'avatar',
+    depth: roomPlayer.gx + roomPlayer.gy,
+    gx: roomPlayer.gx,
+    gy: roomPlayer.gy,
+    color: myAvatar.color,
+    name: myAvatar.name
+  });
+
+  remotePeers.forEach((peer) => {
+    if (peer.id !== myPeerId && peer.mode === 'room' && peer.roomId === room.id) {
+      const pgx = typeof peer.rgx === 'number' ? peer.rgx : 3.5;
+      const pgy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
+      renderables.push({
+        kind: 'avatar',
+        depth: pgx + pgy,
+        gx: pgx,
+        gy: pgy,
+        color: peer.color || '#f43f5e',
+        name: peer.name || 'Amigo'
+      });
+    }
+  });
+
+  renderables.sort((a, b) => a.depth - b.depth);
+  renderables.forEach((item) => {
+    const pt = isoToScreen(item.gx, item.gy, originX, originY, tileW, tileH);
+    if (item.kind === 'object') {
+      drawRoomObject(ctx, item.obj.type, pt.x, pt.y, tileW, editMode);
+    } else {
+      drawAvatar(ctx, pt.x, pt.y, item.color, item.name);
+    }
   });
 
   // Guarda geometria isométrica para clique
@@ -1041,8 +1078,58 @@ function loop(now) {
 
     renderCity();
   } else if (view.mode === 'reception') {
+    if (presenceConn && now - lastPresenceSent > 400) {
+      lastPresenceSent = now;
+      presenceConn.updatePosition({
+        x: Math.round(player.x),
+        y: Math.round(player.y),
+        mode: 'reception',
+        buildingId: view.buildingId,
+        roomId: null
+      });
+    }
     renderReception(now);
   } else {
+    // Movimento do avatar dentro do quarto (teclado ou toque no piso)
+    let rdx = 0;
+    let rdy = 0;
+    if (keys['ArrowUp'] || keys['w'] || keys['W']) { rdx -= 1; rdy -= 1; }
+    if (keys['ArrowDown'] || keys['s'] || keys['S']) { rdx += 1; rdy += 1; }
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) { rdx -= 1; rdy += 1; }
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) { rdx += 1; rdy -= 1; }
+
+    if (rdx !== 0 || rdy !== 0) {
+      roomPlayer.targetGx = null;
+      roomPlayer.targetGy = null;
+      const len = Math.hypot(rdx, rdy);
+      roomPlayer.gx += (rdx / len) * roomPlayer.speed * dt;
+      roomPlayer.gy += (rdy / len) * roomPlayer.speed * dt;
+    } else if (roomPlayer.targetGx !== null) {
+      const dist = Math.hypot(roomPlayer.targetGx - roomPlayer.gx, roomPlayer.targetGy - roomPlayer.gy);
+      if (dist < 0.08) {
+        roomPlayer.targetGx = null;
+        roomPlayer.targetGy = null;
+      } else {
+        roomPlayer.gx += ((roomPlayer.targetGx - roomPlayer.gx) / dist) * roomPlayer.speed * dt;
+        roomPlayer.gy += ((roomPlayer.targetGy - roomPlayer.gy) / dist) * roomPlayer.speed * dt;
+      }
+    }
+    roomPlayer.gx = Math.max(0.4, Math.min(7.6, roomPlayer.gx));
+    roomPlayer.gy = Math.max(0.4, Math.min(5.6, roomPlayer.gy));
+
+    if (presenceConn && now - lastPresenceSent > 180) {
+      lastPresenceSent = now;
+      presenceConn.updatePosition({
+        x: Math.round(player.x),
+        y: Math.round(player.y),
+        mode: 'room',
+        buildingId: view.buildingId,
+        roomId: view.roomId,
+        rgx: Number(roomPlayer.gx.toFixed(2)),
+        rgy: Number(roomPlayer.gy.toFixed(2))
+      });
+    }
+
     renderRoom();
   }
 
@@ -1178,6 +1265,9 @@ canvas.addEventListener('pointerup', (e) => {
     const existing = room.objects.find((o) => o.gx === gx && o.gy === gy);
     if (existing) {
       openObjectModal(existing, room);
+    } else if (!editMode) {
+      roomPlayer.targetGx = gx + 0.5;
+      roomPlayer.targetGy = gy + 0.5;
     } else if (editMode) {
       const cat = OBJECT_CATALOG.find((c) => c.id === selectedPaletteType);
       const newObj = {

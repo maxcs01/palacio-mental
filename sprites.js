@@ -296,7 +296,12 @@ const SPRITE_URLS = {
   bed: '/assets/bed.jpg',
   monitor: '/assets/monitor.jpg',
   ct: '/assets/ct.jpg',
-  xray: '/assets/xray.jpg'
+  xray: '/assets/xray.jpg',
+  blood: '/assets/blood.jpg',
+  ausculta: '/assets/ausculta.jpg',
+  meds: '/assets/meds.jpg',
+  book: '/assets/book.jpg',
+  pdf: '/assets/pdf.jpg'
 };
 const spriteCache = {};
 
