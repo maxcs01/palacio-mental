@@ -60,6 +60,8 @@
           <button id="btnZoomIn" class="btn-hud" title="Zoom +">＋</button>
           <button id="btnZoomOut" class="btn-hud" title="Zoom -">－</button>
           <button id="btnNewBuilding" class="btn-primary">+ Novo Prédio</button>
+          <span class="hud-sep"></span>
+          <span id="cityStatusPill" class="city-status-pill">🏛️ 0 marcos • 👥 Cidade viva</span>
         </div>
         <div class="hud-hint" id="cityHint">
           WASD/Setas ou toque para andar • Clique num prédio para entrar • Scroll/pinça para Zoom
@@ -114,16 +116,36 @@
           </div>
         </div>
 
-        <div class="editor-tabs" role="tablist">
+        <div class="editor-tabs editor-tabs-4" role="tablist">
           <button class="editor-tab active" data-editor-tab="add">➕ Móveis</button>
           <button class="editor-tab" data-editor-tab="move">✋ Mover</button>
+          <button class="editor-tab" data-editor-tab="layout">🧱 Planta</button>
           <button class="editor-tab" data-editor-tab="style">🎨 Quarto</button>
         </div>
 
         <div class="editor-body">
-          <!-- Aba 1: Catálogo visual com miniaturas -->
+          <!-- Aba 1: Catálogo visual com miniaturas + direção + gerador gratuito -->
           <div id="tabAdd" class="editor-pane">
-            <p class="editor-tip">Escolha um objeto abaixo e toque em um espaço livre do piso para posicionar:</p>
+            <button id="btnOpenSpriteStudio" class="btn-studio-create" type="button">
+              ✨ Criar / Gerar Objeto (Grátis)
+            </button>
+
+            <div class="facing-bar">
+              <span>Disposição:</span>
+              <div class="facing-toggle" role="group" aria-label="Direção do objeto">
+                <button id="btnFacingLeft" class="facing-btn active" type="button">↙️ Esquerda</button>
+                <button id="btnFacingRight" class="facing-btn" type="button">↘️ Direita</button>
+              </div>
+            </div>
+
+            <p class="editor-tip">Escolha um objeto e toque num espaço livre do piso (tecla <strong>R</strong> vira o lado):</p>
+
+            <div id="customCatalogWrap" class="hidden" style="margin-bottom:12px;">
+              <div class="editor-section-label">✨ Meus Objetos Salvos</div>
+              <div id="customObjectPalette" class="catalog-grid"></div>
+            </div>
+
+            <div class="editor-section-label">🏥 Catálogo Pronto (18)</div>
             <div id="objectPalette" class="catalog-grid"></div>
           </div>
 
@@ -133,10 +155,30 @@
               <strong>1. Toque no objeto</strong> que você quer mudar de lugar.<br />
               <span>Depois toque no ladrilho livre de destino.</span>
             </div>
+            <button id="btnFlipMovingObj" class="btn-primary hidden" style="width:100%;margin-top:8px;">↔️ Virar Lado (Esquerda / Direita)</button>
             <button id="btnCancelMove" class="btn-secondary hidden" style="width:100%;margin-top:8px;">Cancelar seleção</button>
           </div>
 
-          <!-- Aba 3: Tema visual do quarto + Lista de objetos -->
+          <!-- Aba 3: Planta Modular (expandir linhas/colunas, acoplar corredores e cômodos prontos) -->
+          <div id="tabLayout" class="editor-pane hidden">
+            <div class="editor-section-label">Expandir Rapidamente</div>
+            <div class="layout-quick-row">
+              <button id="btnExpandCol" class="btn-secondary btn-sm">+1 Coluna →</button>
+              <button id="btnExpandRow" class="btn-secondary btn-sm">+1 Linha ↓</button>
+              <button id="btnRotatePreset" class="btn-ghost btn-sm" title="Girar formato (horizontal / vertical)">🔄 Girar</button>
+            </div>
+
+            <div class="editor-section-label" style="margin-top:12px;">Acoplar Corredor ou Cômodo Pronto</div>
+            <p class="editor-tip" id="layoutPresetTip">Escolha um formato abaixo e clique no piso ou ao lado de um corredor/quarto para encaixar:</p>
+            <div id="floorplanPresetGrid" class="preset-grid"></div>
+
+            <div class="layout-footer-row">
+              <span id="layoutAreaInfo" class="editor-subtitle">7×6 (42 ladrilhos)</span>
+              <button id="btnResetViewFromLayout" class="btn-ghost btn-sm">⌖ Centralizar</button>
+            </div>
+          </div>
+
+          <!-- Aba 4: Tema visual do quarto + Lista de objetos -->
           <div id="tabStyle" class="editor-pane hidden">
             <div class="editor-section-label">Textura & Estilo do Quarto</div>
             <div id="themeGrid" class="theme-grid"></div>

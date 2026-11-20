@@ -1,24 +1,36 @@
 import {
   OBJECT_CATALOG,
+  FLOORPLAN_PRESETS,
   ROOM_THEMES,
   CITY_LOTS,
   DEFAULT_CLINICAL_ROOMS,
+  createDefaultRoomCells,
+  ensureRoomCells,
+  getRoomBounds,
+  syncMayorMilestones,
+  getAllCatalogItems,
+  findCatalogItem,
   loadState,
   saveState,
   getBuildingCondition
 } from './data.js';
 import {
   drawIsoBox,
+  drawIllustratedCityLandscape,
   drawPixelBuilding,
   drawHouse,
   drawMuseum,
   drawTree,
   drawAvatar,
   drawCar,
-  drawRoomObject,
-  drawIllustratedRoomShell,
-  getRoomTheme
+  drawModularRoom,
+  getRoomTheme,
+  registerCustomSprites,
+  processIllustratedSprite,
+  exportSpriteToDataUrl,
+  createMnemonicSpriteCanvas
 } from './sprites.js';
+import { generateFreeAiSprite } from './imageGen.js';
 import { ambientMusic } from './audio.js';
 import {
   getSessionUser,
@@ -45,6 +57,9 @@ const WORLD_W = 24 * TILE;
 const WORLD_H = 16 * TILE;
 
 let state = loadState();
+if (!Array.isArray(state.customCatalog)) state.customCatalog = [];
+syncMayorMilestones(state);
+registerCustomSprites(state.customCatalog);
 
 // Navegação atual: 'city' | 'reception' | 'room'
 let view = {
@@ -79,32 +94,33 @@ function resetInnerCam() {
 }
 
 function clampInnerCam() {
-  innerCam.zoom = Math.max(0.65, Math.min(3.2, innerCam.zoom));
-  innerCam.x = Math.max(-360, Math.min(360, innerCam.x));
-  innerCam.y = Math.max(-280, Math.min(280, innerCam.y));
+  innerCam.zoom = Math.max(0.45, Math.min(3.2, innerCam.zoom));
+  innerCam.x = Math.max(-720, Math.min(720, innerCam.x));
+  innerCam.y = Math.max(-560, Math.min(560, innerCam.y));
 }
 
 // Jogador e entidades vivas
 const player = { x: 12 * TILE, y: 9.5 * TILE, targetX: null, targetY: null, speed: 155 };
-const roomPlayer = { gx: 3.5, gy: 4.5, targetGx: null, targetGy: null, speed: 3.3 };
+const roomPlayer = { gx: 3.5, gy: 4.5, targetGx: null, targetGy: null, speed: 3.4 };
 const keys = {};
 
 const cars = [
-  { x: 0, y: 8 * TILE + 8, vx: 75, color: '#ef4444', dir: 1 },
-  { x: WORLD_W - 40, y: 8 * TILE + 26, vx: -65, color: '#eab308', dir: -1 },
-  { x: 14 * TILE + 6, y: 0, vy: 55, color: '#22c55e', dir: 1, vertical: true }
+  { x: 0, y: 8.1 * TILE, vx: 72, color: '#e07a5f', dir: 1 },
+  { x: WORLD_W - 40, y: 8.55 * TILE, vx: -62, color: '#eab308', dir: -1 },
+  { x: 14.08 * TILE, y: 2.6 * TILE, vy: 54, color: '#4d908e', dir: 1, vertical: true }
 ];
 
 const pedestrians = [
-  { x: 9 * TILE, y: 7.4 * TILE, vx: 22, minX: 7 * TILE, maxX: 14 * TILE, shirt: '#f472b6' },
-  { x: 15 * TILE, y: 10.3 * TILE, vx: -18, minX: 10 * TILE, maxX: 17 * TILE, shirt: '#facc15' },
-  { x: 11.2 * TILE, y: 9.2 * TILE, vx: 0, shirt: '#34d399' },
-  { x: 11.7 * TILE, y: 9.2 * TILE, vx: 0, shirt: '#fb923c' }
+  { x: 9 * TILE, y: 7.55 * TILE, vx: 22, minX: 6.5 * TILE, maxX: 13.4 * TILE, shirt: '#f472b6' },
+  { x: 15.6 * TILE, y: 9.35 * TILE, vx: -18, minX: 14.8 * TILE, maxX: 20.5 * TILE, shirt: '#facc15' },
+  { x: 10.6 * TILE, y: 9.85 * TILE, vx: 0, shirt: '#34d399' },
+  { x: 11.05 * TILE, y: 9.85 * TILE, vx: 0, shirt: '#fb923c' },
+  { x: 6.2 * TILE, y: 9.45 * TILE, vx: 15, minX: 4.5 * TILE, maxX: 9.2 * TILE, shirt: '#818cf8' }
 ];
 
 const ducks = [
-  { x: 12.2 * TILE, y: 8.6 * TILE, angle: 0 },
-  { x: 12.8 * TILE, y: 8.8 * TILE, angle: 2.2 }
+  { x: 11.45 * TILE, y: 10.95 * TILE, angle: 0 },
+  { x: 12.05 * TILE, y: 11.18 * TILE, angle: 2.2 }
 ];
 
 let trafficLightGreen = true;
@@ -112,10 +128,13 @@ let trafficTimer = 0;
 
 // Estado do Estúdio de Edição de Quartos
 let editMode = false;
-let editorTab = 'add'; // 'add' | 'move' | 'style'
+let editorTab = 'add'; // 'add' | 'move' | 'layout' | 'style'
 let selectedPaletteType = OBJECT_CATALOG[0].id;
+let selectedPaletteFlip = false; // false = esquerda (padrão), true = direita (espelhado)
+let selectedLayoutPresetId = FLOORPLAN_PRESETS[0].id;
+let layoutRotated = false;
 let movingObjectId = null;
-let hoveredRoomTile = null; // { gx, gy, occupied }
+let hoveredRoomTile = null; // { gx, gy, occupied, inCells }
 
 // ---------------- MULTIPLAYER ESTILO HABBO (ATÉ 10 PESSOAS) ----------------
 const urlParams = new URLSearchParams(window.location.search);
@@ -134,10 +153,10 @@ function getOrCreateLocalWorldId() {
 const myPeerId = `peer-${Math.random().toString(36).slice(2, 8)}`;
 let myAvatar = JSON.parse(localStorage.getItem('palacio_avatar_v1') || '{"name":"Você","color":"#38bdf8"}');
 let remotePeers = [];
-const peerSmoothPos = new Map(); // interpolação suave dos avatares remotos
+const peerSmoothPos = new Map();
 let presenceConn = null;
 let connectedWorldId = null;
-let multiplayerStatus = 'offline'; // 'offline' | 'connecting' | 'connected' | 'error'
+let multiplayerStatus = 'offline';
 let lastPresenceSent = 0;
 let myEmote = '';
 let myEmoteTimer = null;
@@ -151,11 +170,18 @@ const btnMusic = document.getElementById('btnMusic');
 const btnBack = document.getElementById('btnBack');
 const btnRonda = document.getElementById('btnRonda');
 const cityHud = document.getElementById('cityHud');
+const cityStatusPill = document.getElementById('cityStatusPill');
 const receptionHud = document.getElementById('receptionHud');
 const roomHud = document.getElementById('roomHud');
 const btnToggleEdit = document.getElementById('btnToggleEdit');
 const btnRoomRonda = document.getElementById('btnRoomRonda');
 const objectPaletteEl = document.getElementById('objectPalette');
+const customCatalogWrap = document.getElementById('customCatalogWrap');
+const customObjectPaletteEl = document.getElementById('customObjectPalette');
+const btnOpenSpriteStudio = document.getElementById('btnOpenSpriteStudio');
+const btnFacingLeft = document.getElementById('btnFacingLeft');
+const btnFacingRight = document.getElementById('btnFacingRight');
+const btnFlipMovingObj = document.getElementById('btnFlipMovingObj');
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalTitle = document.getElementById('modalTitle');
 const modalBody = document.getElementById('modalBody');
@@ -176,9 +202,16 @@ const btnCloseEdit = document.getElementById('btnCloseEdit');
 const btnToggleDrawer = document.getElementById('btnToggleDrawer');
 const tabAdd = document.getElementById('tabAdd');
 const tabMove = document.getElementById('tabMove');
+const tabLayout = document.getElementById('tabLayout');
 const tabStyle = document.getElementById('tabStyle');
 const moveStatusBox = document.getElementById('moveStatusBox');
 const btnCancelMove = document.getElementById('btnCancelMove');
+const floorplanPresetGrid = document.getElementById('floorplanPresetGrid');
+const layoutAreaInfo = document.getElementById('layoutAreaInfo');
+const btnExpandCol = document.getElementById('btnExpandCol');
+const btnExpandRow = document.getElementById('btnExpandRow');
+const btnRotatePreset = document.getElementById('btnRotatePreset');
+const btnResetViewFromLayout = document.getElementById('btnResetViewFromLayout');
 const themeGrid = document.getElementById('themeGrid');
 const inpRenameRoom = document.getElementById('inpRenameRoom');
 const btnRenameRoom = document.getElementById('btnRenameRoom');
@@ -301,7 +334,7 @@ function goToPeer(peer) {
           const rm = ap.rooms.find((r) => r.id === peer.roomId);
           if (rm) {
             enterRoom(b.id, f.id, ap.id, rm.id);
-            roomPlayer.gx = typeof peer.rgx === 'number' ? Math.max(0.6, peer.rgx - 0.7) : 3.5;
+            roomPlayer.gx = typeof peer.rgx === 'number' ? peer.rgx : 3.5;
             roomPlayer.gy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
             pushMyPresenceNow(true);
             return;
@@ -419,6 +452,25 @@ function getCurrentRoom() {
   return a ? a.rooms.find((r) => r.id === view.roomId) || null : null;
 }
 
+function getCityVitality() {
+  if (!state.buildings || state.buildings.length === 0) return 1;
+  let active = 0;
+  state.buildings.forEach((b) => {
+    const cond = getBuildingCondition(b, state.decayThresholdDays);
+    if (cond === 'new') active += 1;
+    else if (cond === 'worn') active += 0.5;
+  });
+  return active / state.buildings.length;
+}
+
+function updateCityStatusPill() {
+  const mayor = syncMayorMilestones(state);
+  const count = ['museum', 'fountain', 'residences', 'pier'].filter((k) => mayor[k]).length;
+  const vitality = getCityVitality();
+  const mood = vitality > 0.55 ? '👥 Cidade movimentada' : vitality > 0 ? '🌤️ Movimento leve' : '🍃 Ruas vazias (revise!)';
+  cityStatusPill.textContent = `🏛️ ${count}/4 marcos fixos • ${mood}`;
+}
+
 function resizeCanvas() {
   const rect = canvas.parentElement.getBoundingClientRect();
   canvasCssW = Math.max(320, Math.floor(rect.width));
@@ -463,6 +515,7 @@ function updateTopbar() {
     roomHud.classList.add('hidden');
     editBanner.classList.add('hidden');
     roomEditorPanel.classList.add('hidden');
+    updateCityStatusPill();
   } else if (view.mode === 'reception') {
     const b = getCurrentBuilding();
     breadcrumbEl.textContent = `Cidade → ${b ? b.name : ''} (Recepção)`;
@@ -504,6 +557,113 @@ function closeModal() {
   modalBackdrop.classList.add('hidden');
 }
 
+// ---------------- PLANTA MODULAR (CORREDORES & CÔMODOS ACOPLADOS) ----------------
+function getActivePresetDims() {
+  const preset = FLOORPLAN_PRESETS.find((p) => p.id === selectedLayoutPresetId) || FLOORPLAN_PRESETS[0];
+  const w = layoutRotated ? preset.h : preset.w;
+  const h = layoutRotated ? preset.w : preset.h;
+  return { preset, w, h };
+}
+
+function computeLayoutStampTiles(anchorGx, anchorGy) {
+  const { preset, w, h } = getActivePresetDims();
+  const tiles = [];
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      tiles.push({ gx: anchorGx + dx, gy: anchorGy + dy, zone: preset.zone });
+    }
+  }
+  return { preset, tiles, isErase: preset.zone === 'erase' };
+}
+
+function applyLayoutStamp(room, anchorGx, anchorGy) {
+  const cells = ensureRoomCells(room);
+  const { preset, tiles, isErase } = computeLayoutStampTiles(anchorGx, anchorGy);
+
+  if (isErase) {
+    const k = `${anchorGx},${anchorGy}`;
+    if (!cells[k]) return;
+    if (Object.keys(cells).length <= 6) {
+      showToast('O quarto precisa manter pelo menos 6 ladrilhos.');
+      return;
+    }
+    const hasObj = room.objects.some((o) => o.gx === anchorGx && o.gy === anchorGy);
+    if (hasObj) {
+      showToast('Remova ou mova o móvel desse ladrilho antes de apagar o piso.');
+      return;
+    }
+    delete cells[k];
+    persistState();
+    refreshEditorPanel();
+    return;
+  }
+
+  // Limite de segurança para manter o desempenho ótimo no celular (até 320 ladrilhos por espaço)
+  const projected = new Set(Object.keys(cells));
+  tiles.forEach((t) => projected.add(`${t.gx},${t.gy}`));
+  if (projected.size > 320) {
+    showToast('Limite máximo atingido para este espaço (320 ladrilhos).');
+    return;
+  }
+
+  tiles.forEach((t) => {
+    // Se já era 'room' e carimbou 'corridor' por cima (ou vice-versa), aplica a nova zona
+    cells[`${t.gx},${t.gy}`] = t.zone;
+  });
+
+  persistState();
+  refreshEditorPanel();
+  if (preset.w > 1 || preset.h > 1) {
+    showToast(`🧱 ${preset.name} acoplado na planta!`);
+  }
+}
+
+function expandRoomColumn(room) {
+  const cells = ensureRoomCells(room);
+  const b = getRoomBounds(cells);
+  if (b.count + b.rows > 320) {
+    showToast('Espaço já atingiu o tamanho máximo.');
+    return;
+  }
+  const newX = b.maxX + 1;
+  let added = 0;
+  for (let y = b.minY; y <= b.maxY; y++) {
+    if (cells[`${b.maxX},${y}`]) {
+      cells[`${newX},${y}`] = cells[`${b.maxX},${y}`];
+      added++;
+    }
+  }
+  if (added === 0) {
+    for (let y = b.minY; y <= b.maxY; y++) cells[`${newX},${y}`] = 'room';
+  }
+  persistState();
+  refreshEditorPanel();
+  showToast('➕ +1 coluna adicionada ao quarto!');
+}
+
+function expandRoomRow(room) {
+  const cells = ensureRoomCells(room);
+  const b = getRoomBounds(cells);
+  if (b.count + b.cols > 320) {
+    showToast('Espaço já atingiu o tamanho máximo.');
+    return;
+  }
+  const newY = b.maxY + 1;
+  let added = 0;
+  for (let x = b.minX; x <= b.maxX; x++) {
+    if (cells[`${x},${b.maxY}`]) {
+      cells[`${x},${newY}`] = cells[`${x},${b.maxY}`];
+      added++;
+    }
+  }
+  if (added === 0) {
+    for (let x = b.minX; x <= b.maxX; x++) cells[`${x},${newY}`] = 'room';
+  }
+  persistState();
+  refreshEditorPanel();
+  showToast('➕ +1 linha adicionada ao quarto!');
+}
+
 // ---------------- ESTÚDIO DE EDIÇÃO DO QUARTO ----------------
 function setEditMode(on) {
   if (on && sharedRole === 'viewer') {
@@ -529,6 +689,7 @@ function setEditorTab(tab) {
   });
   tabAdd.classList.toggle('hidden', tab !== 'add');
   tabMove.classList.toggle('hidden', tab !== 'move');
+  tabLayout.classList.toggle('hidden', tab !== 'layout');
   tabStyle.classList.toggle('hidden', tab !== 'style');
   refreshEditorPanel();
   updateEditorBanner();
@@ -537,35 +698,72 @@ function setEditorTab(tab) {
 function updateEditorBanner() {
   if (!editMode) return;
   if (editorTab === 'add') {
-    const cat = OBJECT_CATALOG.find((c) => c.id === selectedPaletteType);
-    editBannerText.textContent = `Adicionar "${cat?.shortName || 'Móvel'}": toque num espaço livre • ou toque num objeto para editar`;
+    const cat = findCatalogItem(state, selectedPaletteType);
+    const dirLabel = selectedPaletteFlip ? '↘️ Dir' : '↙️ Esq';
+    editBannerText.textContent = `Adicionar "${cat?.shortName || 'Móvel'}" (${dirLabel}): toque num espaço livre • tecla R vira o lado`;
   } else if (editorTab === 'move') {
     const room = getCurrentRoom();
     const obj = room?.objects.find((o) => o.id === movingObjectId);
     if (obj) {
-      editBannerText.textContent = `Movendo "${obj.title || 'Objeto'}": toque no novo ladrilho livre`;
+      editBannerText.textContent = `Movendo "${obj.title || 'Objeto'}": toque no novo ladrilho livre (ou R para virar)`;
     } else {
-      editBannerText.textContent = 'Mover: toque primeiro no objeto que deseja mudar de lugar';
+      editBannerText.textContent = 'Mover: toque primeiro no objeto que deseja mudar de lugar ou virar';
+    }
+  } else if (editorTab === 'layout') {
+    const { preset, w, h } = getActivePresetDims();
+    if (preset.zone === 'erase') {
+      editBannerText.textContent = 'Planta: toque em um ladrilho sem móveis para remover';
+    } else {
+      editBannerText.textContent = `Planta (${preset.shortName} ${w}×${h}): clique ao lado do quarto ou corredor para acoplar`;
     }
   } else {
     editBannerText.textContent = 'Estilo do Quarto: personalize a textura do ambiente ou gerencie os objetos';
   }
 }
 
+function renderFloorplanPresets() {
+  floorplanPresetGrid.innerHTML = '';
+  FLOORPLAN_PRESETS.forEach((p) => {
+    const w = layoutRotated ? p.h : p.w;
+    const h = layoutRotated ? p.w : p.h;
+    const card = document.createElement('button');
+    card.className = `preset-card ${p.zone === 'erase' ? 'danger' : ''} ${p.id === selectedLayoutPresetId ? 'active' : ''}`;
+    card.innerHTML = `
+      <strong>${p.icon} ${p.shortName}</strong>
+      <small>${p.zone === 'erase' ? 'Apagar piso' : `${w} × ${h} ladrilhos`}</small>
+    `;
+    card.onclick = () => {
+      selectedLayoutPresetId = p.id;
+      renderFloorplanPresets();
+      updateEditorBanner();
+    };
+    floorplanPresetGrid.appendChild(card);
+  });
+}
+
 function refreshEditorPanel() {
   const room = getCurrentRoom();
   if (!room) return;
+  const cells = ensureRoomCells(room);
+  const bounds = getRoomBounds(cells);
 
   const count = room.objects.length;
   editorRoomMeta.textContent = `${room.name} • ${count} objeto${count === 1 ? '' : 's'}`;
+  layoutAreaInfo.textContent = `${bounds.cols}×${bounds.rows} (${bounds.count} ladrilhos)`;
+
+  // Atualiza presets da aba Planta
+  renderFloorplanPresets();
 
   // Atualiza status da aba Mover
   const movingObj = room.objects.find((o) => o.id === movingObjectId);
   if (movingObj) {
-    moveStatusBox.innerHTML = `<strong>Selecionado: ${escapeHtml(movingObj.title || 'Objeto')}</strong><br /><span>Agora toque em qualquer ladrilho livre no quarto para reposicionar.</span>`;
+    const sideTxt = movingObj.flip ? '↘️ Direita' : '↙️ Esquerda';
+    moveStatusBox.innerHTML = `<strong>Selecionado: ${escapeHtml(movingObj.title || 'Objeto')}</strong><br /><span>Lado atual: ${sideTxt} • Toque no ladrilho livre de destino ou clique abaixo para virar.</span>`;
+    btnFlipMovingObj.classList.remove('hidden');
     btnCancelMove.classList.remove('hidden');
   } else {
-    moveStatusBox.innerHTML = `<strong>1. Toque no objeto</strong> que você quer mudar de lugar.<br /><span>Depois toque no ladrilho livre de destino.</span>`;
+    moveStatusBox.innerHTML = `<strong>1. Toque no objeto</strong> que você quer mudar de lugar ou virar.<br /><span>Depois toque no ladrilho livre de destino.</span>`;
+    btnFlipMovingObj.classList.add('hidden');
     btnCancelMove.classList.add('hidden');
   }
 
@@ -590,29 +788,33 @@ function refreshEditorPanel() {
     themeGrid.appendChild(card);
   });
 
-  // Atualiza input de renomear
   if (document.activeElement !== inpRenameRoom) {
     inpRenameRoom.value = room.name || '';
   }
 
-  // Atualiza lista de objetos do quarto
   roomObjectsList.innerHTML = '';
   if (room.objects.length === 0) {
     roomObjectsList.innerHTML = '<p class="editor-tip">Nenhum objeto neste quarto ainda. Use a aba ➕ Móveis!</p>';
   } else {
     room.objects.forEach((obj) => {
-      const cat = OBJECT_CATALOG.find((c) => c.id === obj.type);
+      const cat = findCatalogItem(state, obj.type);
       const row = document.createElement('div');
       row.className = 'room-obj-row';
       row.innerHTML = `
-        <img src="${cat?.thumb || '/assets/book.jpg'}" alt="${escapeHtml(cat?.shortName || '')}" />
+        <img src="${cat?.thumb || '/assets/book.jpg'}" class="${obj.flip ? 'flipped' : ''}" alt="${escapeHtml(cat?.shortName || '')}" />
         <div class="room-obj-row-info">
           <strong>${escapeHtml(obj.title || cat?.name || 'Objeto')}</strong>
-          <small>${escapeHtml(cat?.shortName || obj.type)} • (${obj.gx + 1}, ${obj.gy + 1})</small>
+          <small>${escapeHtml(cat?.shortName || obj.type)} • ${obj.flip ? '↘️ Dir' : '↙️ Esq'} • (${obj.gx + 1}, ${obj.gy + 1})</small>
         </div>
+        <button class="btn-ghost btn-sm" data-act="flip" title="Virar Esquerda / Direita">↔️</button>
         <button class="btn-ghost btn-sm" data-act="edit" title="Editar">✏️</button>
         <button class="btn-ghost btn-sm" data-act="del" title="Remover">🗑️</button>
       `;
+      row.querySelector('[data-act="flip"]').onclick = () => {
+        obj.flip = !obj.flip;
+        persistState();
+        refreshEditorPanel();
+      };
       row.querySelector('[data-act="edit"]').onclick = () => openObjectModal(obj, room);
       row.querySelector('[data-act="del"]').onclick = () => {
         room.objects = room.objects.filter((o) => o.id !== obj.id);
@@ -776,10 +978,23 @@ function enterRoom(buildingId, floorId, apartmentId, roomId) {
   editMode = false;
   movingObjectId = null;
   hoveredRoomTile = null;
+
+  const room = getCurrentRoom();
+  if (room) {
+    const cells = ensureRoomCells(room);
+    if (!cells[`${Math.floor(roomPlayer.gx)},${Math.floor(roomPlayer.gy)}`]) {
+      const firstKey = Object.keys(cells)[0];
+      if (firstKey) {
+        const [fx, fy] = firstKey.split(',').map(Number);
+        roomPlayer.gx = fx + 0.5;
+        roomPlayer.gy = fy + 0.5;
+      }
+    }
+  }
+
   updateTopbar();
   pushMyPresenceNow(true);
 
-  const room = getCurrentRoom();
   if (room && room.isBibliography) {
     openBibliographyModal(room);
   }
@@ -863,13 +1078,13 @@ async function openPdfViewer({ title, url = '', page = 1, quote = '', localPdfId
 }
 
 function openObjectModal(obj, room) {
-  const cat = OBJECT_CATALOG.find((c) => c.id === obj.type);
+  const cat = findCatalogItem(state, obj.type);
   const wrap = document.createElement('div');
 
   if (!editMode) {
     wrap.innerHTML = `
       <div class="obj-modal-hero">
-        <img src="${cat?.thumb || '/assets/book.jpg'}" alt="${escapeHtml(cat?.name || '')}" />
+        <img src="${cat?.thumb || '/assets/book.jpg'}" class="${obj.flip ? 'flipped' : ''}" alt="${escapeHtml(cat?.name || '')}" />
         <div>
           <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">${escapeHtml(cat?.name || 'Objeto')}</div>
           <h3 style="color:var(--accent);font-size:17px;margin-top:2px;">${escapeHtml(obj.title || 'Sem título')}</h3>
@@ -914,16 +1129,29 @@ function openObjectModal(obj, room) {
     const bibOptions = bibPdfs
       .map((p) => `<option value="${p.id}" ${obj.bibPdfId === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
       .join('');
-    const typeOptions = OBJECT_CATALOG
+    const customItems = Array.isArray(state.customCatalog) ? state.customCatalog : [];
+    const customGroup = customItems.length
+      ? `<optgroup label="✨ Meus Objetos Criados">${customItems
+          .map((c) => `<option value="${c.id}" ${obj.type === c.id ? 'selected' : ''}>${c.icon || '✨'} ${escapeHtml(c.name)}</option>`)
+          .join('')}</optgroup>`
+      : '';
+    const builtInGroup = `<optgroup label="🏥 Catálogo Pronto">${OBJECT_CATALOG
       .map((c) => `<option value="${c.id}" ${obj.type === c.id ? 'selected' : ''}>${c.icon} ${escapeHtml(c.name)}</option>`)
-      .join('');
+      .join('')}</optgroup>`;
+    let editFlip = Boolean(obj.flip);
 
     wrap.innerHTML = `
       <div class="obj-modal-hero">
-        <img id="editObjPreviewImg" src="${cat?.thumb || '/assets/book.jpg'}" alt="" />
-        <div class="field" style="flex:1;">
-          <label>Modelo visual do móvel</label>
-          <select id="objType">${typeOptions}</select>
+        <img id="editObjPreviewImg" src="${cat?.thumb || '/assets/book.jpg'}" class="${editFlip ? 'flipped' : ''}" alt="" />
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+          <div class="field">
+            <label>Modelo visual do móvel</label>
+            <select id="objType">${customGroup}${builtInGroup}</select>
+          </div>
+          <div class="facing-toggle" role="group" aria-label="Disposição">
+            <button id="editFlipLeft" type="button" class="facing-btn ${!editFlip ? 'active' : ''}">↙️ Esquerda</button>
+            <button id="editFlipRight" type="button" class="facing-btn ${editFlip ? 'active' : ''}">↘️ Direita</button>
+          </div>
         </div>
       </div>
 
@@ -956,13 +1184,25 @@ function openObjectModal(obj, room) {
 
     const typeSel = document.getElementById('objType');
     const previewImg = document.getElementById('editObjPreviewImg');
+    const btnEditLeft = document.getElementById('editFlipLeft');
+    const btnEditRight = document.getElementById('editFlipRight');
+
+    const syncEditFlipUi = () => {
+      previewImg.classList.toggle('flipped', editFlip);
+      btnEditLeft.classList.toggle('active', !editFlip);
+      btnEditRight.classList.toggle('active', editFlip);
+    };
+    btnEditLeft.onclick = () => { editFlip = false; syncEditFlipUi(); };
+    btnEditRight.onclick = () => { editFlip = true; syncEditFlipUi(); };
+
     typeSel.onchange = () => {
-      const nextCat = OBJECT_CATALOG.find((c) => c.id === typeSel.value);
+      const nextCat = findCatalogItem(state, typeSel.value);
       if (nextCat) previewImg.src = nextCat.thumb;
     };
 
     document.getElementById('btnSaveObj').onclick = () => {
       obj.type = typeSel.value;
+      obj.flip = editFlip;
       obj.title = document.getElementById('objTitle').value.trim();
       obj.summary = document.getElementById('objSummary').value.trim();
       obj.pdfLabel = document.getElementById('objPdfLabel').value.trim();
@@ -1007,7 +1247,7 @@ function openNewBuildingModal() {
       <select id="newBLot">${freeLots.map((l) => `<option value="${l.id}">${l.label}</option>`).join('')}</select>
     </div>
     <div class="field">
-      <label>Cor do Telhado</label>
+      <label>Cor de Destaque do Prédio</label>
       <input id="newBColor" type="color" value="#10b981" style="height:38px;" />
     </div>
     <button id="btnCreateB" class="btn-primary">Construir Prédio com Recepção</button>
@@ -1028,6 +1268,7 @@ function openNewBuildingModal() {
       floors: []
     });
     persistState();
+    updateCityStatusPill();
     closeModal();
   };
 }
@@ -1053,6 +1294,8 @@ function drawRoomBackdrop(themeId) {
 }
 
 // ---------------- RENDERIZAÇÃO DA RECEPÇÃO (ISOMÉTRICO 2.5D ILUSTRADO) ----------------
+const RECEPTION_CELLS = createDefaultRoomCells(7, 5);
+
 function renderReception(now) {
   const b = getCurrentBuilding();
   drawRoomBackdrop('clinic');
@@ -1074,9 +1317,42 @@ function renderReception(now) {
   const originX = Math.floor(canvasCssW / 2) - Math.floor((cols - rows) * (tileW / 4));
   const originY = Math.floor((canvasCssH - 20) / 2) - Math.floor((cols + rows) * (tileH / 4)) + 44;
 
-  drawIllustratedRoomShell(ctx, {
-    originX, originY, tileW, tileH, cols, rows,
-    themeId: 'clinic', isNight: state.isNight, editMode: false
+  const t = now * 0.001;
+  const receptionAvatars = [
+    { gx: 2.7, gy: 3.4, color: myAvatar.color, name: myAvatar.name, emote: myEmote, isPeer: false },
+    { gx: 1.5 + Math.sin(t * 0.7) * 0.6, gy: 2.8, color: '#a855f7', name: '', emote: '', isPeer: false }
+  ];
+
+  canvas._receptionPeers = [];
+  let peerIdx = 0;
+  remotePeers.forEach((peer) => {
+    if (peer.id === myPeerId || peer.mode !== 'reception' || peer.buildingId !== b.id) return;
+    const px = 3.8 + (peerIdx % 3) * 0.9;
+    const py = 3.1 + Math.floor(peerIdx / 3) * 0.85;
+    peerIdx++;
+    receptionAvatars.push({
+      gx: px,
+      gy: py,
+      color: peer.color || '#f43f5e',
+      name: peer.name || 'Amigo',
+      emote: peer.emote || '',
+      isPeer: true
+    });
+    const pt = isoToScreen(px, py, originX, originY, tileW, tileH);
+    canvas._receptionPeers.push({ peer, x: pt.x, y: pt.y });
+  });
+
+  drawModularRoom(ctx, {
+    cells: RECEPTION_CELLS,
+    objects: [],
+    avatars: receptionAvatars,
+    originX,
+    originY,
+    tileW,
+    tileH,
+    themeId: 'clinic',
+    isNight: state.isNight,
+    editMode: false
   });
 
   // Balcão isométrico da Recepção + Atendente
@@ -1087,7 +1363,7 @@ function renderReception(now) {
 
   // Quadro de Índice em destaque no topo esquerdo (clicável!)
   const p0 = isoToScreen(0, 0, originX, originY, tileW, tileH);
-  const wallH = Math.floor(tileW * 1.32);
+  const wallH = Math.floor(tileW * 1.24);
   const boardW = Math.min(280, Math.floor(canvasCssW * 0.62));
   const boardH = 96;
   const boardX = Math.max(16, Math.floor(p0.x - boardW - 18));
@@ -1124,259 +1400,219 @@ function renderReception(now) {
     });
   }
   canvas._receptionBoard = { x: boardX, y: boardY, w: boardW, h: boardH };
-
-  // Seu avatar e colegas conectados nesta mesma recepção
-  const mePt = isoToScreen(2.7, 3.4, originX, originY, tileW, tileH);
-  drawAvatar(ctx, mePt.x, mePt.y, myAvatar.color, myAvatar.name, myEmote, avScale);
-
-  canvas._receptionPeers = [];
-  let peerIdx = 0;
-  remotePeers.forEach((peer) => {
-    if (peer.id === myPeerId || peer.mode !== 'reception' || peer.buildingId !== b.id) return;
-    const px = 3.8 + (peerIdx % 3) * 0.9;
-    const py = 3.1 + Math.floor(peerIdx / 3) * 0.85;
-    peerIdx++;
-    const pt = isoToScreen(px, py, originX, originY, tileW, tileH);
-    drawAvatar(ctx, pt.x, pt.y, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', avScale, true);
-    canvas._receptionPeers.push({ peer, x: pt.x, y: pt.y });
-  });
-
-  // Visitantes ambiente na recepção
-  const t = now * 0.001;
-  const v1 = isoToScreen(1.5 + Math.sin(t * 0.7) * 0.6, 2.8, originX, originY, tileW, tileH);
-  drawAvatar(ctx, v1.x, v1.y, '#a855f7', '', '', avScale * 0.92);
   ctx.restore();
 }
 
-// ---------------- RENDERIZAÇÃO DA CIDADE ----------------
-function renderCity() {
+// ---------------- RENDERIZAÇÃO DA CIDADE (ILUSTRADA 2.5D + MARCOS PERMANENTES) ----------------
+function renderCity(now) {
   ctx.save();
-  ctx.fillStyle = state.isNight ? '#0b1120' : '#0284c7';
+  ctx.fillStyle = state.isNight ? '#0b1120' : '#3684a8';
   ctx.fillRect(0, 0, canvasCssW, canvasCssH);
 
   ctx.translate(canvasCssW / 2, canvasCssH / 2);
   ctx.scale(cam.zoom, cam.zoom);
   ctx.translate(-cam.x, -cam.y);
 
-  // Grama base do condado
-  ctx.fillStyle = state.isNight ? '#1e3a2f' : '#8ab17d';
-  ctx.fillRect(0, 2 * TILE, WORLD_W, 12 * TILE);
+  const mayor = syncMayorMilestones(state);
+  const vitality = getCityVitality();
+  const allOld = vitality === 0;
 
-  // Montanhas no limite norte
-  for (let i = 0; i < 24; i++) {
-    const mx = i * TILE;
-    ctx.fillStyle = state.isNight ? '#1e293b' : '#64748b';
-    ctx.beginPath();
-    ctx.moveTo(mx, 2 * TILE);
-    ctx.lineTo(mx + TILE / 2, 0.3 * TILE + (i % 2) * 14);
-    ctx.lineTo(mx + TILE, 2 * TILE);
-    ctx.fill();
-    ctx.fillStyle = state.isNight ? '#94a3b8' : '#f8fafc';
-    ctx.beginPath();
-    ctx.moveTo(mx + TILE * 0.3, 0.9 * TILE);
-    ctx.lineTo(mx + TILE / 2, 0.3 * TILE + (i % 2) * 14);
-    ctx.lineTo(mx + TILE * 0.7, 0.9 * TILE);
-    ctx.fill();
-  }
-
-  // Mar no limite sul
-  ctx.fillStyle = state.isNight ? '#0c4a6e' : '#0284c7';
-  ctx.fillRect(0, 14 * TILE, WORLD_W, 2 * TILE);
-  ctx.fillStyle = '#bae6fd';
-  for (let i = 0; i < 12; i++) {
-    ctx.fillRect(i * 96 + 12, 14.4 * TILE, 28, 3);
-  }
-
-  // Estradinhas
-  ctx.fillStyle = '#334155';
-  ctx.fillRect(0, 8 * TILE, WORLD_W, TILE);
-  ctx.fillRect(14 * TILE, 2 * TILE, TILE, 12 * TILE);
-
-  // Faixas de pedestre
-  ctx.fillStyle = '#f8fafc';
-  for (let s = 0; s < 4; s++) {
-    ctx.fillRect(13.6 * TILE, 8 * TILE + 6 + s * 10, 12, 5);
-    ctx.fillRect(15.1 * TILE, 8 * TILE + 6 + s * 10, 12, 5);
-  }
-
-  // Semáforo
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(13.7 * TILE, 7.4 * TILE, 10, 20);
-  ctx.fillStyle = trafficLightGreen ? '#22c55e' : '#ef4444';
-  ctx.fillRect(13.7 * TILE + 2, 7.4 * TILE + 3, 6, 6);
-
-  // Praça Central
-  ctx.fillStyle = state.isNight ? '#1e3a2f' : '#86efac';
-  ctx.fillRect(10 * TILE, 9.2 * TILE, 3.8 * TILE, 3 * TILE);
-  ctx.fillStyle = '#38bdf8';
-  ctx.fillRect(11.4 * TILE, 10 * TILE, 1.8 * TILE, 1.3 * TILE);
-  ducks.forEach((d) => {
-    ctx.fillStyle = '#fef08a';
-    ctx.fillRect(d.x, d.y + Math.sin(d.angle) * 3, 6, 4);
-  });
-  ctx.fillStyle = '#92400e';
-  ctx.fillRect(10.3 * TILE, 9.6 * TILE, 20, 6);
-  ctx.fillRect(10.3 * TILE, 11.4 * TILE, 20, 6);
-
-  // Casinhas decorativas
-  drawHouse(ctx, 2 * TILE, 10 * TILE, '#f97316', state.isNight);
-  drawHouse(ctx, 7 * TILE, 10.5 * TILE, '#ec4899', state.isNight);
-  drawHouse(ctx, 20 * TILE, 10 * TILE, '#14b8a6', state.isNight);
-
-  // Marcos do Prefeito
-  const rondas = state.rondasConcluidas || 0;
-  if (rondas >= 1) drawMuseum(ctx, 16 * TILE, 10.2 * TILE, state.isNight);
-  if (rondas >= 3) {
-    drawHouse(ctx, 21 * TILE, 4.5 * TILE, '#6366f1', state.isNight);
-    drawHouse(ctx, 8 * TILE, 12.2 * TILE, '#84cc16', state.isNight);
-  }
-  if (rondas >= 5) drawAvatar(ctx, 11.2 * TILE, 10.6 * TILE, '#0ea5e9', 'Pescador');
-
-  // Árvores
-  const allOld = state.buildings.every((b) => getBuildingCondition(b, state.decayThresholdDays) === 'old');
-  [[1.5, 4], [8.5, 5], [16.5, 5], [10.2, 11.8], [21.5, 6]].forEach(([gx, gy]) => {
-    drawTree(ctx, gx * TILE, gy * TILE, allOld);
+  // Cenário ilustrado completo (montanhas, gramado texturizado, avenidas com calçadas, praça, praia e mar)
+  drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, TILE, {
+    isNight: state.isNight,
+    trafficLightGreen,
+    now,
+    ducks,
+    hasFountain: Boolean(mayor.fountain),
+    hasPier: Boolean(mayor.pier)
   });
 
-  // Lotes vazios
+  // Lotes vazios elegantes
   CITY_LOTS.forEach((lot) => {
     const occupied = state.buildings.some((b) => b.lotId === lot.id);
     if (!occupied) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-      ctx.setLineDash([4, 4]);
-      ctx.strokeRect(lot.gx * TILE, lot.gy * TILE, 84, 74);
+      ctx.save();
+      ctx.fillStyle = 'rgba(248, 245, 232, 0.22)';
+      ctx.strokeStyle = 'rgba(43, 37, 32, 0.45)';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.roundRect(lot.gx * TILE - 4, lot.gy * TILE + 8, 94, 68, 12);
+      ctx.fill();
+      ctx.stroke();
       ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(43, 37, 32, 0.72)';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Lote Livre', lot.gx * TILE + 43, lot.gy * TILE + 46);
+      ctx.restore();
     }
   });
 
-  // Prédios clicáveis
+  // Ordenação vertical de profundidade (Y) para prédios, casas, museu, árvores e pessoas
+  const cityEntities = [];
+
+  // Casinhas base
+  [
+    [1.4, 9.8, '#d97b48'],
+    [6.6, 10.2, '#e07a5f'],
+    [20.4, 9.7, '#d97b48']
+  ].forEach(([gx, gy, col]) => {
+    cityEntities.push({ y: gy * TILE + 48, draw: () => drawHouse(ctx, gx * TILE, gy * TILE, col, state.isNight) });
+  });
+
+  // Marcos PERMANENTES inaugurados pelo Prefeito (nunca desaparecem mesmo sem revisar!)
+  if (mayor.museum) {
+    cityEntities.push({ y: 10.1 * TILE + 66, draw: () => drawMuseum(ctx, 15.6 * TILE, 10.1 * TILE, state.isNight) });
+  }
+  if (mayor.residences) {
+    cityEntities.push({ y: 4.3 * TILE + 48, draw: () => drawHouse(ctx, 21.1 * TILE, 4.3 * TILE, '#6366f1', state.isNight) });
+    cityEntities.push({ y: 11.7 * TILE + 48, draw: () => drawHouse(ctx, 7.6 * TILE, 11.7 * TILE, '#84cc16', state.isNight) });
+  }
+
+  // Árvores ilustradas do bairro
+  [[1.2, 3.6], [8.1, 4.4], [15.4, 4.5], [21.8, 6.2], [9.3, 12.2], [14.7, 12.1], [22.1, 11.6]].forEach(([gx, gy]) => {
+    cityEntities.push({ y: gy * TILE + 36, draw: () => drawTree(ctx, gx * TILE, gy * TILE, allOld, state.isNight) });
+  });
+
+  // Prédios clicáveis das especialidades
   state.buildings.forEach((b) => {
     const lot = CITY_LOTS.find((l) => l.id === b.lotId);
     if (!lot) return;
     const cond = getBuildingCondition(b, state.decayThresholdDays);
-    drawPixelBuilding(ctx, lot.gx * TILE, lot.gy * TILE, 84, 74, b.color, cond, state.isNight, b.name);
+    cityEntities.push({
+      y: lot.gy * TILE + 80,
+      draw: () => drawPixelBuilding(ctx, lot.gx * TILE, lot.gy * TILE, 86, 76, b.color, cond, state.isNight, b.name)
+    });
   });
 
-  // Carros e Pedestres
-  cars.forEach((c) => drawCar(ctx, c.x, c.y, c.color, !c.vertical));
-  pedestrians.forEach((p) => drawAvatar(ctx, p.x, p.y, p.shirt, ''));
+  // Pessoas da cidade (somem se todos os prédios ficarem abandonados/velhos; voltam ao revisar!)
+  const visiblePedCount = Math.round(pedestrians.length * vitality);
+  pedestrians.slice(0, visiblePedCount).forEach((p) => {
+    cityEntities.push({ y: p.y + 8, draw: () => drawAvatar(ctx, p.x, p.y, p.shirt, '', '', 0.92) });
+  });
 
-  // Amigos conectados na cidade (com posição interpolada)
+  // Pescador aparece se o Pier foi inaugurado E a cidade ainda tem movimento (vitalidade > 0)
+  if (mayor.pier && vitality > 0) {
+    cityEntities.push({
+      y: 13.95 * TILE + 8,
+      draw: () => drawAvatar(ctx, 11.75 * TILE, 13.95 * TILE, '#0ea5e9', 'Pescador', '', 0.95)
+    });
+  }
+
+  // Carros (menos carros se a cidade estiver abandonada)
+  const visibleCars = vitality === 0 ? cars.slice(0, 1) : cars;
+  visibleCars.forEach((c) => {
+    cityEntities.push({ y: c.y + 16, draw: () => drawCar(ctx, c.x, c.y, c.color, !c.vertical) });
+  });
+
+  // Colegas conectados na cidade
   remotePeers.forEach((peer) => {
     if (peer.id === myPeerId) return;
     if (!peer.mode || peer.mode === 'city') {
       const sp = peerSmoothPos.get(peer.id);
       const px = sp ? sp.x : (peer.x || 12 * TILE);
       const py = sp ? sp.y : (peer.y || 9.5 * TILE);
-      drawAvatar(ctx, px, py, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', 1.05, true);
+      cityEntities.push({
+        y: py + 10,
+        draw: () => drawAvatar(ctx, px, py, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', 1.06, true)
+      });
     }
   });
 
   // Avatar do jogador
-  drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote, 1.05);
+  cityEntities.push({
+    y: player.y + 10,
+    draw: () => drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote, 1.06)
+  });
+
+  cityEntities.sort((a, b) => a.y - b.y);
+  cityEntities.forEach((e) => e.draw());
 
   ctx.restore();
 }
 
-// ---------------- RENDERIZAÇÃO DO CÔMODO (ISOMÉTRICO 2.5D ILUSTRADO & MAIOR) ----------------
+// ---------------- RENDERIZAÇÃO DO CÔMODO (PLANTA MODULAR 2.5D ILUSTRADA) ----------------
 function renderRoom() {
   const room = getCurrentRoom();
   drawRoomBackdrop(room?.theme || 'clinic');
   if (!room) return;
+
+  const cells = ensureRoomCells(room);
+  const bounds = getRoomBounds(cells);
 
   ctx.save();
   ctx.translate(canvasCssW / 2 + innerCam.x, canvasCssH / 2 + innerCam.y);
   ctx.scale(innerCam.zoom, innerCam.zoom);
   ctx.translate(-canvasCssW / 2, -canvasCssH / 2);
 
-  const cols = 7;
-  const rows = 6;
-
-  // Quando o Estúdio de Edição está aberto no desktop, desloca o centro um pouco à esquerda
-  const editorDesktopOffset = editMode && canvasCssW > 780 ? 148 : 0;
-  const availW = Math.max(300, canvasCssW - editorDesktopOffset * 2 - 24);
+  const editorDesktopOffset = editMode && canvasCssW > 780 ? 150 : 0;
+  const availW = Math.max(300, canvasCssW - editorDesktopOffset * 2 - 28);
   const availH = Math.max(240, canvasCssH - (editMode && canvasCssW <= 780 ? 220 : 88));
 
-  // Escala bem mais generosa para enxergar todos os detalhes dos móveis ilustrados!
+  const span = Math.max(8, bounds.cols + bounds.rows);
   const tileW = Math.max(
-    64,
+    42,
     Math.min(
-      Math.floor((availW / (cols + rows)) * 2.15),
-      Math.floor((availH / (cols + rows)) * 3.75),
+      Math.floor((availW / span) * 2.12),
+      Math.floor((availH / span) * 3.7),
       124
     )
   );
   const tileH = Math.floor(tileW / 2);
+
+  // Centraliza o bounding box exato da planta (mesmo depois de expandir para esquerda/direita/cima/baixo!)
+  const midGx = (bounds.minX + bounds.maxX + 1) / 2;
+  const midGy = (bounds.minY + bounds.maxY + 1) / 2;
   const centerX = Math.floor((canvasCssW - editorDesktopOffset * 2) / 2);
-  const originX = centerX - Math.floor((cols - rows) * (tileW / 4));
-  const originY = Math.floor(availH / 2) - Math.floor((cols + rows) * (tileH / 4)) + Math.floor(tileW * 0.56);
+  const centerY = Math.floor(availH / 2) + Math.floor(tileW * 0.45);
+  const originX = centerX - (midGx - midGy) * (tileW / 2);
+  const originY = centerY - (midGx + midGy) * (tileH / 2);
 
   const movingObj = movingObjectId ? room.objects.find((o) => o.id === movingObjectId) : null;
 
-  drawIllustratedRoomShell(ctx, {
-    originX,
-    originY,
-    tileW,
-    tileH,
-    cols,
-    rows,
-    themeId: room.theme || 'clinic',
-    isNight: state.isNight,
-    editMode,
-    hoverTile: editMode ? hoveredRoomTile : null,
-    selectedMoveTile: movingObj ? { gx: movingObj.gx, gy: movingObj.gy } : null
-  });
+  // Prévia de colocação de móvel (aba add/move) ou prévia de bloco de planta (aba layout)
+  let ghost = null;
+  let layoutPreview = null;
 
-  // Objetos, fantasma de posicionamento e avatares ordenados por profundidade (gx + gy)
-  const renderables = room.objects.map((obj) => ({
-    kind: 'object',
-    depth: obj.gx + obj.gy,
-    gx: obj.gx + 0.5,
-    gy: obj.gy + 0.5,
-    obj,
-    highlighted: movingObjectId === obj.id || (editMode && hoveredRoomTile && hoveredRoomTile.gx === obj.gx && hoveredRoomTile.gy === obj.gy)
-  }));
-
-  // Pré-visualização translúcida no ladrilho vazio sob o cursor no Modo Edição
-  if (editMode && hoveredRoomTile && !hoveredRoomTile.occupied) {
-    const ghostType =
-      editorTab === 'add'
-        ? selectedPaletteType
-        : editorTab === 'move' && movingObj
-          ? movingObj.type
-          : null;
-    if (ghostType) {
-      renderables.push({
-        kind: 'ghost',
-        depth: hoveredRoomTile.gx + hoveredRoomTile.gy,
-        gx: hoveredRoomTile.gx + 0.5,
-        gy: hoveredRoomTile.gy + 0.5,
-        type: ghostType
-      });
+  if (editMode && hoveredRoomTile) {
+    if (editorTab === 'layout') {
+      layoutPreview = computeLayoutStampTiles(hoveredRoomTile.gx, hoveredRoomTile.gy);
+    } else if (hoveredRoomTile.inCells && !hoveredRoomTile.occupied) {
+      const ghostType =
+        editorTab === 'add'
+          ? selectedPaletteType
+          : editorTab === 'move' && movingObj
+            ? movingObj.type
+            : null;
+      if (ghostType) {
+        ghost = {
+          gx: hoveredRoomTile.gx,
+          gy: hoveredRoomTile.gy,
+          type: ghostType,
+          flip: editorTab === 'add' ? selectedPaletteFlip : Boolean(movingObj?.flip)
+        };
+      }
     }
   }
 
-  const avScale = Math.max(1.12, tileW / 66);
-
-  renderables.push({
-    kind: 'avatar',
-    depth: roomPlayer.gx + roomPlayer.gy,
-    gx: roomPlayer.gx,
-    gy: roomPlayer.gy,
-    color: myAvatar.color,
-    name: myAvatar.name,
-    emote: myEmote,
-    isPeer: false
-  });
+  const roomAvatars = [
+    {
+      gx: roomPlayer.gx,
+      gy: roomPlayer.gy,
+      color: myAvatar.color,
+      name: myAvatar.name,
+      emote: myEmote,
+      isPeer: false
+    }
+  ];
 
   remotePeers.forEach((peer) => {
     if (peer.id !== myPeerId && peer.mode === 'room' && peer.roomId === room.id) {
       const sp = peerSmoothPos.get(peer.id);
       const pgx = sp && typeof sp.rgx === 'number' ? sp.rgx : (typeof peer.rgx === 'number' ? peer.rgx : 3.5);
       const pgy = sp && typeof sp.rgy === 'number' ? sp.rgy : (typeof peer.rgy === 'number' ? peer.rgy : 4.5);
-      renderables.push({
-        kind: 'avatar',
-        depth: pgx + pgy,
+      roomAvatars.push({
         gx: pgx,
         gy: pgy,
         color: peer.color || '#f43f5e',
@@ -1387,34 +1623,31 @@ function renderRoom() {
     }
   });
 
-  renderables.sort((a, b) => a.depth - b.depth);
-  renderables.forEach((item) => {
-    const pt = isoToScreen(item.gx, item.gy, originX, originY, tileW, tileH);
-    if (item.kind === 'object') {
-      drawRoomObject(ctx, item.obj.type, pt.x, pt.y, tileW, {
-        editMode,
-        highlighted: item.highlighted,
-        alpha: movingObjectId === item.obj.id ? 0.65 : 1
-      });
-    } else if (item.kind === 'ghost') {
-      drawRoomObject(ctx, item.type, pt.x, pt.y, tileW, {
-        editMode: false,
-        highlighted: true,
-        alpha: 0.55
-      });
-    } else {
-      drawAvatar(ctx, pt.x, pt.y, item.color, item.name, item.emote || '', avScale, item.isPeer);
-    }
+  drawModularRoom(ctx, {
+    cells,
+    objects: room.objects,
+    avatars: roomAvatars,
+    ghost,
+    layoutPreview,
+    originX,
+    originY,
+    tileW,
+    tileH,
+    themeId: room.theme || 'clinic',
+    isNight: state.isNight,
+    editMode,
+    hoverTile: editMode ? hoveredRoomTile : null,
+    selectedMoveTile: movingObj ? { gx: movingObj.gx, gy: movingObj.gy } : null,
+    movingObjectId
   });
 
-  // Guarda geometria isométrica para clique/hover
-  canvas._roomGrid = { originX, originY, tileW, tileH, cols, rows };
+  canvas._roomGrid = { originX, originY, tileW, tileH, bounds };
   ctx.restore();
 }
 
-function screenToRoomTile(clientX, clientY) {
+function screenToRoomTile(clientX, clientY, allowOutside = false) {
   if (!canvas._roomGrid) return null;
-  const { originX, originY, tileW, tileH, cols, rows } = canvas._roomGrid;
+  const { originX, originY, tileW, tileH, bounds } = canvas._roomGrid;
   const rect = canvas.getBoundingClientRect();
   const cx = clientX - rect.left;
   const cy = clientY - rect.top;
@@ -1424,8 +1657,19 @@ function screenToRoomTile(clientX, clientY) {
   const dy = (iy - originY) / (tileH / 2);
   const gx = Math.floor((dx + dy) / 2);
   const gy = Math.floor((dy - dx) / 2);
-  if (gx < 0 || gx >= cols || gy < 0 || gy >= rows) return null;
-  return { gx, gy, ix, iy };
+
+  const room = getCurrentRoom();
+  const cells = room ? ensureRoomCells(room) : {};
+  const inCells = Boolean(cells[`${gx},${gy}`]);
+
+  if (!allowOutside && !inCells) return null;
+  if (
+    allowOutside &&
+    (gx < bounds.minX - 10 || gx > bounds.maxX + 10 || gy < bounds.minY - 10 || gy > bounds.maxY + 10)
+  ) {
+    return null;
+  }
+  return { gx, gy, ix, iy, inCells };
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
@@ -1434,10 +1678,9 @@ function loop(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  // Aplica escala DPR limpa no início de cada frame
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  // Interpolação suave das posições dos colegas conectados
+  // Interpolação suave dos colegas
   const lerpAlpha = Math.min(1, dt * 10);
   remotePeers.forEach((peer) => {
     if (peer.id === myPeerId) return;
@@ -1456,7 +1699,6 @@ function loop(now) {
     }
   });
 
-  // Ignora teclas de movimento se o usuário estiver digitando em algum campo
   const typing =
     document.activeElement &&
     ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
@@ -1472,9 +1714,9 @@ function loop(now) {
       if (c.vertical) {
         if (!trafficLightGreen && c.y > 6.8 * TILE && c.y < 7.8 * TILE) return;
         c.y += c.vy * dt;
-        if (c.y > 14 * TILE) c.y = 2 * TILE;
+        if (c.y > 13.6 * TILE) c.y = 2.5 * TILE;
       } else {
-        if (trafficLightGreen && c.x > 12.6 * TILE && c.x < 13.5 * TILE && c.vx > 0) return;
+        if (trafficLightGreen && c.x > 12.6 * TILE && c.x < 13.4 * TILE && c.vx > 0) return;
         c.x += c.vx * dt;
         if (c.x > WORLD_W) c.x = -30;
         if (c.x < -30) c.x = WORLD_W;
@@ -1487,7 +1729,7 @@ function loop(now) {
       if (p.x > p.maxX || p.x < p.minX) p.vx *= -1;
     });
     ducks.forEach((d) => {
-      d.angle += dt * 2.5;
+      d.angle += dt * 2.4;
     });
 
     let dx = 0;
@@ -1515,14 +1757,14 @@ function loop(now) {
       }
     }
     player.x = Math.max(TILE * 0.5, Math.min(WORLD_W - TILE * 0.5, player.x));
-    player.y = Math.max(TILE * 2.2, Math.min(13.8 * TILE, player.y));
+    player.y = Math.max(TILE * 2.5, Math.min(13.6 * TILE, player.y));
 
     if (presenceConn && now - lastPresenceSent > 110) {
       lastPresenceSent = now;
       pushMyPresenceNow(false);
     }
 
-    renderCity();
+    renderCity(now);
   } else if (view.mode === 'reception') {
     if (presenceConn && now - lastPresenceSent > 450) {
       lastPresenceSent = now;
@@ -1530,6 +1772,9 @@ function loop(now) {
     }
     renderReception(now);
   } else {
+    const room = getCurrentRoom();
+    const cells = room ? ensureRoomCells(room) : {};
+
     let rdx = 0;
     let rdy = 0;
     if (!typing && !editMode) {
@@ -1539,24 +1784,38 @@ function loop(now) {
       if (keys['ArrowRight'] || keys['d'] || keys['D']) { rdx += 1; rdy -= 1; }
     }
 
+    let nextGx = roomPlayer.gx;
+    let nextGy = roomPlayer.gy;
+
     if (rdx !== 0 || rdy !== 0) {
       roomPlayer.targetGx = null;
       roomPlayer.targetGy = null;
       const len = Math.hypot(rdx, rdy);
-      roomPlayer.gx += (rdx / len) * roomPlayer.speed * dt;
-      roomPlayer.gy += (rdy / len) * roomPlayer.speed * dt;
+      nextGx += (rdx / len) * roomPlayer.speed * dt;
+      nextGy += (rdy / len) * roomPlayer.speed * dt;
     } else if (roomPlayer.targetGx !== null) {
       const dist = Math.hypot(roomPlayer.targetGx - roomPlayer.gx, roomPlayer.targetGy - roomPlayer.gy);
       if (dist < 0.08) {
         roomPlayer.targetGx = null;
         roomPlayer.targetGy = null;
       } else {
-        roomPlayer.gx += ((roomPlayer.targetGx - roomPlayer.gx) / dist) * roomPlayer.speed * dt;
-        roomPlayer.gy += ((roomPlayer.targetGy - roomPlayer.gy) / dist) * roomPlayer.speed * dt;
+        nextGx += ((roomPlayer.targetGx - roomPlayer.gx) / dist) * roomPlayer.speed * dt;
+        nextGy += ((roomPlayer.targetGy - roomPlayer.gy) / dist) * roomPlayer.speed * dt;
       }
     }
-    roomPlayer.gx = Math.max(0.4, Math.min(6.6, roomPlayer.gx));
-    roomPlayer.gy = Math.max(0.4, Math.min(5.6, roomPlayer.gy));
+
+    // Permite andar livremente por TODOS os cômodos e corredores conectados da planta!
+    if (cells[`${Math.floor(nextGx)},${Math.floor(nextGy)}`]) {
+      roomPlayer.gx = nextGx;
+      roomPlayer.gy = nextGy;
+    } else if (cells[`${Math.floor(nextGx)},${Math.floor(roomPlayer.gy)}`]) {
+      roomPlayer.gx = nextGx;
+    } else if (cells[`${Math.floor(roomPlayer.gx)},${Math.floor(nextGy)}`]) {
+      roomPlayer.gy = nextGy;
+    } else {
+      roomPlayer.targetGx = null;
+      roomPlayer.targetGy = null;
+    }
 
     if (presenceConn && now - lastPresenceSent > 120) {
       lastPresenceSent = now;
@@ -1571,7 +1830,29 @@ function loop(now) {
 
 // ---------------- EVENTOS ----------------
 window.addEventListener('resize', resizeCanvas);
-window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+window.addEventListener('keydown', (e) => {
+  keys[e.key] = true;
+  const typing =
+    document.activeElement &&
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+  if (!typing && editMode && view.mode === 'room' && (e.key === 'r' || e.key === 'R')) {
+    if (editorTab === 'add') {
+      setSelectedFacing(!selectedPaletteFlip);
+    } else if (editorTab === 'move' && movingObjectId) {
+      const room = getCurrentRoom();
+      const obj = room?.objects.find((o) => o.id === movingObjectId);
+      if (obj) {
+        obj.flip = !obj.flip;
+        persistState();
+        refreshEditorPanel();
+      }
+    } else if (editorTab === 'layout') {
+      layoutRotated = !layoutRotated;
+      renderFloorplanPresets();
+      updateEditorBanner();
+    }
+  }
+});
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
 canvas.addEventListener('wheel', (e) => {
@@ -1623,13 +1904,14 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
 
-  // Hover preview no Modo Edição do Quarto (desktop/mouse)
+  // Hover preview no Modo Edição do Quarto (Móveis, Mover ou Planta)
   if (!cam.dragging && view.mode === 'room' && editMode) {
-    const hit = screenToRoomTile(e.clientX, e.clientY);
+    const allowOutside = editorTab === 'layout';
+    const hit = screenToRoomTile(e.clientX, e.clientY, allowOutside);
     const room = getCurrentRoom();
     if (hit && room) {
       const occupied = room.objects.some((o) => o.gx === hit.gx && o.gy === hit.gy);
-      hoveredRoomTile = { gx: hit.gx, gy: hit.gy, occupied };
+      hoveredRoomTile = { gx: hit.gx, gy: hit.gy, occupied, inCells: hit.inCells };
     } else {
       hoveredRoomTile = null;
     }
@@ -1672,7 +1954,6 @@ canvas.addEventListener('pointerup', (e) => {
 
   if (view.mode === 'city') {
     const pt = screenToWorld(e.clientX, e.clientY);
-    // Clique em algum colega conectado na cidade (área generosa para celular)
     const clickedPeer = remotePeers.find((p) => {
       if (p.id === myPeerId || (p.mode && p.mode !== 'city')) return false;
       const sp = peerSmoothPos.get(p.id);
@@ -1689,7 +1970,7 @@ canvas.addEventListener('pointerup', (e) => {
       if (!lot) continue;
       const bx = lot.gx * TILE;
       const by = lot.gy * TILE;
-      if (pt.x >= bx - 6 && pt.x <= bx + 90 && pt.y >= by - 14 && pt.y <= by + 80) {
+      if (pt.x >= bx - 16 && pt.x <= bx + 102 && pt.y >= by - 58 && pt.y <= by + 84) {
         enterBuilding(b.id);
         return;
       }
@@ -1703,7 +1984,6 @@ canvas.addEventListener('pointerup', (e) => {
     const ix = (cx - (canvasCssW / 2 + innerCam.x)) / innerCam.zoom + canvasCssW / 2;
     const iy = (cy - (canvasCssH / 2 + innerCam.y)) / innerCam.zoom + canvasCssH / 2;
 
-    // Verifica clique em algum amigo na recepção
     const clickedRecPeer = (canvas._receptionPeers || []).find(
       (rp) => Math.hypot(rp.x - ix, rp.y - iy) < 34
     );
@@ -1713,14 +1993,23 @@ canvas.addEventListener('pointerup', (e) => {
     }
     openReceptionModal();
   } else if (view.mode === 'room' && canvas._roomGrid) {
-    const hit = screenToRoomTile(e.clientX, e.clientY);
+    const allowOutside = editMode && editorTab === 'layout';
+    const hit = screenToRoomTile(e.clientX, e.clientY, allowOutside);
     if (!hit) return;
-    const { gx, gy } = hit;
+    const { gx, gy, inCells } = hit;
 
     const room = getCurrentRoom();
     if (!room) return;
 
-    // Verifica clique em algum colega no mesmo quarto (fora da aba de adicionar/mover)
+    // Aba PLANTA: acoplar corredor, quarto pronto, +1 ladrilho ou remover ladrilho
+    if (editMode && editorTab === 'layout') {
+      applyLayoutStamp(room, gx, gy);
+      return;
+    }
+
+    if (!inCells) return;
+
+    // Clique em colega no mesmo quarto (fora do modo edição)
     if (!editMode) {
       const clickedRoomPeer = remotePeers.find((p) => {
         if (p.id === myPeerId || p.mode !== 'room' || p.roomId !== room.id) return false;
@@ -1747,7 +2036,6 @@ canvas.addEventListener('pointerup', (e) => {
       return;
     }
 
-    // MODO EDIÇÃO: comportamento inteligente por aba
     if (editorTab === 'move') {
       if (existing) {
         movingObjectId = movingObjectId === existing.id ? null : existing.id;
@@ -1771,10 +2059,11 @@ canvas.addEventListener('pointerup', (e) => {
     if (existing) {
       openObjectModal(existing, room);
     } else if (editorTab === 'add') {
-      const cat = OBJECT_CATALOG.find((c) => c.id === selectedPaletteType);
+      const cat = findCatalogItem(state, selectedPaletteType);
       const newObj = {
         id: uid('obj'),
         type: selectedPaletteType,
+        flip: selectedPaletteFlip,
         gx,
         gy,
         title: cat ? cat.name : 'Novo Objeto',
@@ -1866,11 +2155,36 @@ btnToggleDrawer.onclick = () => {
   const collapsed = roomEditorPanel.classList.toggle('collapsed');
   btnToggleDrawer.textContent = collapsed ? '▴' : '▾';
 };
+btnFlipMovingObj.onclick = () => {
+  const room = getCurrentRoom();
+  const obj = room?.objects.find((o) => o.id === movingObjectId);
+  if (!obj) return;
+  obj.flip = !obj.flip;
+  persistState();
+  refreshEditorPanel();
+  showToast(`↔️ "${obj.title || 'Objeto'}" virado para a ${obj.flip ? 'direita' : 'esquerda'}!`);
+};
+
 btnCancelMove.onclick = () => {
   movingObjectId = null;
   refreshEditorPanel();
   updateEditorBanner();
 };
+
+btnExpandCol.onclick = () => {
+  const room = getCurrentRoom();
+  if (room) expandRoomColumn(room);
+};
+btnExpandRow.onclick = () => {
+  const room = getCurrentRoom();
+  if (room) expandRoomRow(room);
+};
+btnRotatePreset.onclick = () => {
+  layoutRotated = !layoutRotated;
+  renderFloorplanPresets();
+  updateEditorBanner();
+};
+btnResetViewFromLayout.onclick = () => resetInnerCam();
 
 document.querySelectorAll('.editor-tab').forEach((btn) => {
   btn.onclick = () => setEditorTab(btn.dataset.editorTab);
@@ -1890,35 +2204,337 @@ btnRenameRoom.onclick = () => {
 btnRoomRonda.onclick = () => {
   const b = getCurrentBuilding();
   if (b) {
+    const before = { ...(state.mayorUnlocked || {}) };
     b.lastReviewedAt = new Date().toISOString();
     state.rondasConcluidas = (state.rondasConcluidas || 0) + 1;
+    const after = syncMayorMilestones(state);
     persistState();
+
     let msg = `🩺 Ronda concluída! "${b.name}" recuperou o vigor.`;
-    if (state.rondasConcluidas === 1) msg += ' 🏛️ O Prefeito inaugurou o MUSEU DA MEDICINA!';
-    if (state.rondasConcluidas === 3) msg += ' 🏡 O Prefeito inaugurou novas casas na cidade!';
-    if (state.rondasConcluidas === 5) msg += ' 🎣 Novo morador pescando na Praça Central!';
-    showToast(msg, '', null, 6000);
+    if (!before.museum && after.museum) msg += ' 🏛️ O Prefeito inaugurou o MUSEU DA MEDICINA (permanente)!';
+    else if (!before.fountain && after.fountain) msg += ' ⛲ O Prefeito inaugurou a FONTE DA PRAÇA (permanente)!';
+    else if (!before.residences && after.residences) msg += ' 🏡 O Prefeito inaugurou NOVAS CASAS no bairro (permanentes)!';
+    else if (!before.pier && after.pier) msg += ' ⛵ O Prefeito inaugurou o DECK E BARQUINHO no mar (permanente)!';
+    showToast(msg, '', null, 6500);
   }
 };
 
-// Catálogo visual com miniaturas ilustradas 2.5D
-OBJECT_CATALOG.forEach((item) => {
+// ---------------- CATÁLOGO DINÂMICO (18 PRONTOS + OBJETOS GERADOS PELO USUÁRIO) ----------------
+function setSelectedFacing(flip) {
+  selectedPaletteFlip = Boolean(flip);
+  btnFacingLeft.classList.toggle('active', !selectedPaletteFlip);
+  btnFacingRight.classList.toggle('active', selectedPaletteFlip);
+  renderObjectPalette();
+  updateEditorBanner();
+}
+
+btnFacingLeft.onclick = () => setSelectedFacing(false);
+btnFacingRight.onclick = () => setSelectedFacing(true);
+
+function makeCatalogCard(item, isCustom = false) {
   const btn = document.createElement('button');
+  btn.type = 'button';
   btn.className = `catalog-card ${item.id === selectedPaletteType ? 'active' : ''}`;
   btn.innerHTML = `
     <div class="catalog-thumb">
-      <img src="${item.thumb}" alt="${escapeHtml(item.shortName)}" loading="lazy" />
+      <img src="${item.thumb}" class="${selectedPaletteFlip ? 'flipped' : ''}" alt="${escapeHtml(item.shortName || item.name)}" loading="lazy" />
     </div>
-    <span>${escapeHtml(item.shortName)}</span>
+    <span>${escapeHtml(item.shortName || item.name)}</span>
   `;
   btn.onclick = () => {
     selectedPaletteType = item.id;
-    document.querySelectorAll('.catalog-card').forEach((el) => el.classList.remove('active'));
-    btn.classList.add('active');
+    renderObjectPalette();
     updateEditorBanner();
   };
-  objectPaletteEl.appendChild(btn);
-});
+
+  if (isCustom) {
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'custom-del-btn';
+    delBtn.title = 'Remover da minha lista';
+    delBtn.textContent = '✕';
+    delBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!confirm(`Remover "${item.shortName || item.name}" da sua lista salva?`)) return;
+      state.customCatalog = (state.customCatalog || []).filter((c) => c.id !== item.id);
+      if (selectedPaletteType === item.id) selectedPaletteType = OBJECT_CATALOG[0].id;
+      persistState();
+      renderObjectPalette();
+      updateEditorBanner();
+    };
+    btn.appendChild(delBtn);
+  }
+  return btn;
+}
+
+function renderObjectPalette() {
+  const customItems = Array.isArray(state.customCatalog) ? state.customCatalog : [];
+  customCatalogWrap.classList.toggle('hidden', customItems.length === 0);
+  customObjectPaletteEl.innerHTML = '';
+  customItems.forEach((item) => {
+    customObjectPaletteEl.appendChild(makeCatalogCard(item, true));
+  });
+
+  objectPaletteEl.innerHTML = '';
+  OBJECT_CATALOG.forEach((item) => {
+    objectPaletteEl.appendChild(makeCatalogCard(item, false));
+  });
+}
+
+renderObjectPalette();
+
+// ---------------- ESTÚDIO DE CRIAÇÃO / GERADOR GRATUITO DE OBJETOS ----------------
+function openSpriteGeneratorModal() {
+  let activeTab = 'ai'; // 'ai' | 'mnemonic' | 'upload'
+  let previewDataUrl = '';
+  let previewFlipped = false;
+  let activeAbort = null;
+
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="gen-tabs" role="tablist">
+      <button type="button" class="gen-tab active" data-gtab="ai">✨ IA Grátis</button>
+      <button type="button" class="gen-tab" data-gtab="mnemonic">🧠 Mnemônico (0s)</button>
+      <button type="button" class="gen-tab" data-gtab="upload">🖼️ Enviar Imagem</button>
+    </div>
+
+    <!-- Aba 1: Gerador IA 100% Gratuito (AI Horde) -->
+    <div id="genPaneAi" class="card-box">
+      <small style="color:var(--muted)">Descreva qualquer objeto ou imagem mnemônica! O app aplica automaticamente o <strong>estilo ilustrado 2.5D dos quartos</strong> e recorta o fundo branco — <strong>100% grátis</strong>.</small>
+      <div class="field">
+        <label>O que você quer desenhar?</label>
+        <textarea id="genAiPrompt" rows="2" placeholder="Ex: palavra CIPRO feita de flores coloridas"></textarea>
+      </div>
+      <div class="row-actions" style="gap:5px;">
+        <button type="button" class="btn-ghost btn-sm" data-sample="palavra CIPRO feita de flores">🌸 Palavra CIPRO de flores</button>
+        <button type="button" class="btn-ghost btn-sm" data-sample="coração anatômico com asas douradas">❤️ Coração com asas</button>
+        <button type="button" class="btn-ghost btn-sm" data-sample="bactéria fofa usando coroa dourada">👑 Bactéria com coroa</button>
+      </div>
+      <div class="row-actions">
+        <button type="button" id="btnRunAiGen" class="btn-primary">✨ Gerar Imagem Grátis</button>
+        <button type="button" id="btnCancelAiGen" class="btn-secondary hidden">Cancelar</button>
+      </div>
+      <div id="genAiStatus" class="gen-status-pill hidden"></div>
+    </div>
+
+    <!-- Aba 2: Criador Mnemônico Instantâneo (Offline, 0 segundos) -->
+    <div id="genPaneMnemonic" class="card-box hidden">
+      <small style="color:var(--muted)">Cria em <strong>0 segundos</strong> um objeto 2.5D ilustrado perfeito para memorizar nomes difíceis de remédios, bactérias e siglas.</small>
+      <div style="display:flex;gap:8px;">
+        <div class="field" style="flex:2;">
+          <label>Palavra / Sigla (até 12 letras)</label>
+          <input id="mnemWord" maxlength="12" value="CIPRO" placeholder="Ex: CIPRO, AMOXI, CURB" />
+        </div>
+        <div class="field" style="flex:1;">
+          <label>Cor</label>
+          <input id="mnemColor" type="color" value="#e07a5f" style="height:36px;" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Estilo 2.5D</label>
+        <select id="mnemStyle">
+          <option value="floral-word">🌸 Palavra Esculpida com Símbolos (ex: CIPRO de flores)</option>
+          <option value="bottle">💊 Frasco de Remédio Rotulado</option>
+          <option value="totem">🏆 Totem / Medalhão Mnemônico</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Símbolo / Ícone decorativo</label>
+        <div class="emoji-picks" id="mnemEmojiPicks">
+          ${['🌸', '🌼', '💊', '🔥', '⚡', '👑', '🛡️', '🧬', '🦠', '❤️', '🫁', '🧠', '💉', '❄️'].map((em, i) => `<button type="button" class="emoji-pick ${i === 0 ? 'active' : ''}" data-em="${em}">${em}</button>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Aba 3: Enviar imagem pronta do dispositivo -->
+    <div id="genPaneUpload" class="card-box hidden">
+      <small style="color:var(--muted)">Envie qualquer desenho ou imagem com fundo branco/transparente do celular ou PC. O app remove o fundo branco automaticamente!</small>
+      <input id="genUploadFile" type="file" accept="image/*" />
+    </div>
+
+    <!-- Prévia compartilhada com teste de Esquerda / Direita + Salvar na Lista -->
+    <div class="card-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong style="font-size:13px;">Prévia do Objeto (fundo transparente)</strong>
+        <button type="button" id="btnPreviewFlip" class="btn-ghost btn-sm">↔️ Testar Lado (↙️ Esq)</button>
+      </div>
+      <div id="genPreviewStage" class="gen-preview-stage">
+        <span style="font-size:12px;">Gere ou escolha uma imagem acima para visualizar aqui.</span>
+      </div>
+      <div class="field">
+        <label>Nome curto para guardar na sua lista</label>
+        <input id="genSaveName" maxlength="22" placeholder="Ex: Cipro Flor" />
+      </div>
+      <div class="row-actions" style="justify-content:flex-end;">
+        <button type="button" id="btnSaveCustomSprite" class="btn-success" disabled>💾 Guardar na Minha Lista e Usar</button>
+      </div>
+    </div>
+  `;
+
+  openModal('✨ Criador de Objetos 2.5D (Grátis)', wrap);
+
+  const paneAi = wrap.querySelector('#genPaneAi');
+  const paneMnem = wrap.querySelector('#genPaneMnemonic');
+  const paneUp = wrap.querySelector('#genPaneUpload');
+  const previewStage = wrap.querySelector('#genPreviewStage');
+  const btnPreviewFlip = wrap.querySelector('#btnPreviewFlip');
+  const inpSaveName = wrap.querySelector('#genSaveName');
+  const btnSave = wrap.querySelector('#btnSaveCustomSprite');
+  const aiStatus = wrap.querySelector('#genAiStatus');
+  const btnRunAi = wrap.querySelector('#btnRunAiGen');
+  const btnCancelAi = wrap.querySelector('#btnCancelAiGen');
+  const inpAiPrompt = wrap.querySelector('#genAiPrompt');
+
+  let selectedMnemEmoji = '🌸';
+
+  function updatePreview(dataUrl, suggestedName = '') {
+    previewDataUrl = dataUrl;
+    btnSave.disabled = !dataUrl;
+    if (suggestedName && !inpSaveName.value.trim()) {
+      inpSaveName.value = suggestedName.slice(0, 22);
+    }
+    if (!dataUrl) {
+      previewStage.innerHTML = '<span style="font-size:12px;">Gere ou escolha uma imagem acima para visualizar aqui.</span>';
+      return;
+    }
+    previewStage.innerHTML = `<img class="gen-preview-img ${previewFlipped ? 'flipped' : ''}" src="${dataUrl}" alt="Prévia" />`;
+  }
+
+  function renderMnemonicNow() {
+    const word = wrap.querySelector('#mnemWord').value.trim() || 'CIPRO';
+    const style = wrap.querySelector('#mnemStyle').value;
+    const accentColor = wrap.querySelector('#mnemColor').value;
+    const c = createMnemonicSpriteCanvas({ word, emoji: selectedMnemEmoji, style, accentColor });
+    const url = exportSpriteToDataUrl(c, 256);
+    updatePreview(url, word);
+  }
+
+  wrap.querySelectorAll('.gen-tab').forEach((tabBtn) => {
+    tabBtn.onclick = () => {
+      activeTab = tabBtn.dataset.gtab;
+      wrap.querySelectorAll('.gen-tab').forEach((b) => b.classList.toggle('active', b === tabBtn));
+      paneAi.classList.toggle('hidden', activeTab !== 'ai');
+      paneMnem.classList.toggle('hidden', activeTab !== 'mnemonic');
+      paneUp.classList.toggle('hidden', activeTab !== 'upload');
+      if (activeTab === 'mnemonic') {
+        renderMnemonicNow();
+      }
+    };
+  });
+
+  wrap.querySelectorAll('[data-sample]').forEach((b) => {
+    b.onclick = () => {
+      inpAiPrompt.value = b.dataset.sample;
+      if (!inpSaveName.value.trim()) {
+        inpSaveName.value = b.textContent.replace(/^[^\s]+\s+/, '').slice(0, 20);
+      }
+    };
+  });
+
+  btnPreviewFlip.onclick = () => {
+    previewFlipped = !previewFlipped;
+    btnPreviewFlip.textContent = previewFlipped ? '↔️ Testar Lado (↘️ Dir)' : '↔️ Testar Lado (↙️ Esq)';
+    const img = previewStage.querySelector('img');
+    if (img) img.classList.toggle('flipped', previewFlipped);
+  };
+
+  btnRunAi.onclick = async () => {
+    const promptText = inpAiPrompt.value.trim();
+    if (!promptText) return alert('Descreva o objeto que deseja gerar!');
+    if (activeAbort) activeAbort.abort();
+    activeAbort = new AbortController();
+
+    btnRunAi.disabled = true;
+    btnCancelAi.classList.remove('hidden');
+    aiStatus.classList.remove('hidden');
+    aiStatus.textContent = 'Iniciando gerador gratuito...';
+
+    try {
+      const res = await generateFreeAiSprite(promptText, {
+        signal: activeAbort.signal,
+        onStatus: (txt) => { aiStatus.textContent = txt; }
+      });
+      aiStatus.textContent = `✅ Pronto! (modelo gratuito: ${res.modelUsed})`;
+      const shortGuess = promptText.split(/\s+/).slice(0, 3).join(' ');
+      updatePreview(res.dataUrl, shortGuess);
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        aiStatus.textContent = 'Geração cancelada.';
+      } else {
+        aiStatus.textContent = `⚠️ ${err?.message || 'Falha no servidor gratuito.'} Dica: tente de novo ou use a aba "🧠 Mnemônico (0s)".`;
+      }
+    } finally {
+      btnRunAi.disabled = false;
+      btnCancelAi.classList.add('hidden');
+      activeAbort = null;
+    }
+  };
+
+  btnCancelAi.onclick = () => {
+    if (activeAbort) activeAbort.abort();
+  };
+
+  // Eventos da aba Mnemônico Instantâneo
+  wrap.querySelector('#mnemWord').oninput = () => {
+    inpSaveName.value = wrap.querySelector('#mnemWord').value.trim().slice(0, 22);
+    renderMnemonicNow();
+  };
+  wrap.querySelector('#mnemStyle').onchange = renderMnemonicNow;
+  wrap.querySelector('#mnemColor').oninput = renderMnemonicNow;
+  wrap.querySelectorAll('.emoji-pick').forEach((eb) => {
+    eb.onclick = () => {
+      selectedMnemEmoji = eb.dataset.em;
+      wrap.querySelectorAll('.emoji-pick').forEach((x) => x.classList.toggle('active', x === eb));
+      renderMnemonicNow();
+    };
+  });
+
+  // Eventos da aba Enviar Imagem
+  wrap.querySelector('#genUploadFile').onchange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const processed = processIllustratedSprite(img, false);
+        const url = exportSpriteToDataUrl(processed, 256);
+        const cleanName = file.name.replace(/\.[^.]+$/, '').slice(0, 20);
+        updatePreview(url, cleanName);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Salvar na lista do usuário e selecionar já pronto para colocar no quarto!
+  btnSave.onclick = () => {
+    if (!previewDataUrl) return;
+    const label = inpSaveName.value.trim() || 'Meu Objeto';
+    state.customCatalog = Array.isArray(state.customCatalog) ? state.customCatalog : [];
+    if (state.customCatalog.length >= 60) {
+      return alert('Limite de 60 objetos personalizados atingido. Remova algum antigo para guardar novos.');
+    }
+    const newItem = {
+      id: uid('cust'),
+      name: label,
+      shortName: label.slice(0, 14),
+      icon: activeTab === 'mnemonic' ? selectedMnemEmoji : '✨',
+      thumb: previewDataUrl,
+      preprocessed: true
+    };
+    state.customCatalog.unshift(newItem);
+    registerCustomSprites(state.customCatalog);
+    selectedPaletteType = newItem.id;
+    selectedPaletteFlip = previewFlipped;
+    persistState();
+    setSelectedFacing(previewFlipped);
+    closeModal();
+    showToast(`✨ "${label}" salvo na sua lista! Toque no piso para posicionar.`);
+  };
+}
+
+btnOpenSpriteStudio.onclick = openSpriteGeneratorModal;
 
 // Busca rápida global
 searchInput.addEventListener('input', () => {
@@ -1979,11 +2595,11 @@ let currentUser = null;
 let cloudStatus = 'offline';
 
 function persistState(skipBroadcast = false) {
+  syncMayorMilestones(state);
   saveState(state);
   if (!skipBroadcast && presenceConn && sharedRole !== 'viewer') {
     presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
   }
-  // Apenas o dono do mundo salva diretamente na linha do Supabase (editores sincronizam via broadcast -> dono salva)
   const isOwnerOfCloudRow = currentUser && (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id);
   if (isOwnerOfCloudRow) {
     cloudStatus = 'syncing';
@@ -2028,7 +2644,6 @@ function connectMultiplayer(worldId) {
       renderOnlineBar();
     },
     onSubscribed: () => {
-      // Se entrou por link compartilhado (visitante ou editor), pede o snapshot ao vivo ao anfitrião
       if (sharedWorldOwnerId && (!currentUser || sharedWorldOwnerId !== currentUser.id)) {
         presenceConn.broadcast('world_request', { requesterId: myPeerId });
       }
@@ -2040,14 +2655,16 @@ function connectMultiplayer(worldId) {
     onBroadcast: (event, payload) => {
       if (event === 'world_sync' && payload?.state && payload.senderId !== myPeerId) {
         state = payload.state;
+        if (!Array.isArray(state.customCatalog)) state.customCatalog = [];
+        syncMayorMilestones(state);
+        registerCustomSprites(state.customCatalog);
         saveState(state);
+        renderObjectPalette();
         updateTopbar();
-        // Se eu sou o dono logado e um editor alterou o quarto, salvo na nuvem automaticamente
         if (currentUser && (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id)) {
           persistState(true);
         }
       } else if (event === 'world_request' && payload?.requesterId !== myPeerId) {
-        // Anfitrião (ou qualquer editor com o mundo carregado) responde com o estado atual
         if (!sharedWorldOwnerId || sharedRole === 'editor') {
           presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
         }
@@ -2083,7 +2700,6 @@ async function initCloudSession() {
     console.warn('Falha ao verificar sessão:', err);
   }
 
-  // 1. Tenta carregar/salvar mundo na nuvem (em bloco isolado para NUNCA derrubar o multiplayer!)
   const cloudTargetOwner = sharedWorldOwnerId || currentUser?.id;
   const looksLikeUuid = cloudTargetOwner && /^[0-9a-f-]{32,}$/i.test(cloudTargetOwner);
 
@@ -2092,7 +2708,11 @@ async function initCloudSession() {
       const remote = await loadCloudWorld(cloudTargetOwner);
       if (remote && remote.data) {
         state = remote.data;
+        if (!Array.isArray(state.customCatalog)) state.customCatalog = [];
+        syncMayorMilestones(state);
+        registerCustomSprites(state.customCatalog);
         saveState(state);
+        renderObjectPalette();
       } else if (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id) {
         await saveCloudWorld(currentUser.id, state);
       }
@@ -2105,7 +2725,6 @@ async function initCloudSession() {
     }
   }
 
-  // 2. Conecta ao Multiplayer Realtime SEMPRE (mesmo sem login, usando sala rápida ou ID da conta)
   const activeWorldId = sharedWorldOwnerId || currentUser?.id || getOrCreateLocalWorldId();
   connectMultiplayer(activeWorldId);
 
@@ -2342,7 +2961,6 @@ function openAccountModal() {
 
 btnAccount.onclick = openAccountModal;
 
-// Registro de PWA
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
