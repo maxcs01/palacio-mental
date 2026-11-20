@@ -45,14 +45,15 @@ export function findCatalogItem(state, typeId) {
   return getAllCatalogItems(state).find((c) => c.id === typeId) || null;
 }
 
-// Moldes prontos para construir/acoplar corredores e cômodos na Planta Modular
+// Moldes prontos para construir/acoplar corredores, cômodos e editar paredes na Planta Modular
 export const FLOORPLAN_PRESETS = [
   { id: 'corridor', name: 'Corredor (6×2)', shortName: 'Corredor', w: 6, h: 2, zone: 'corridor', icon: '🚪' },
   { id: 'room-5x5', name: 'Quarto 5×5', shortName: 'Quarto 5×5', w: 5, h: 5, zone: 'room', icon: '🛏️' },
   { id: 'room-6x6', name: 'Quarto 6×6', shortName: 'Quarto 6×6', w: 6, h: 6, zone: 'room', icon: '🏥' },
   { id: 'room-8x6', name: 'Sala 8×6', shortName: 'Sala 8×6', w: 8, h: 6, zone: 'room', icon: '🏛️' },
   { id: 'tile-room', name: '+1 Ladrilho', shortName: '+1 Ladrilho', w: 1, h: 1, zone: 'room', icon: '➕' },
-  { id: 'tile-erase', name: 'Remover Ladrilho', shortName: 'Remover', w: 1, h: 1, zone: 'erase', icon: '🧹' }
+  { id: 'tile-erase', name: 'Remover Ladrilho', shortName: 'Remover Piso', w: 1, h: 1, zone: 'erase', icon: '🧹' },
+  { id: 'wall-toggle', name: 'Apagar / Por Parede', shortName: 'Apagar Parede', w: 1, h: 1, zone: 'wall', icon: '🧱' }
 ];
 
 // Cria mapa padrão 7x6 de células para um quarto (retrocompatível com quartos antigos)
@@ -218,13 +219,46 @@ export const ROOM_THEMES = [
   }
 ];
 
-// Lotes disponíveis na cidade para criar novos prédios
+// Grade isométrica 2.5D da Cidade (12 quadras organizadas com avenidas diagonais)
+export const CITY_GRID = {
+  originX: 840,
+  originY: 160,
+  tileW: 82,
+  tileH: 41,
+  cols: 20,
+  rows: 15
+};
+
+export function cityIso(u, v) {
+  return {
+    x: CITY_GRID.originX + (u - v) * (CITY_GRID.tileW / 2),
+    y: CITY_GRID.originY + (u + v) * (CITY_GRID.tileH / 2)
+  };
+}
+
+export function screenToCityIso(wx, wy) {
+  const dx = (wx - CITY_GRID.originX) / (CITY_GRID.tileW / 2);
+  const dy = (wy - CITY_GRID.originY) / (CITY_GRID.tileH / 2);
+  return {
+    u: (dx + dy) / 2,
+    v: (dy - dx) / 2
+  };
+}
+
+// 12 lotes organizados em quadras isométricas (prontos para expandir muitas especialidades!)
 export const CITY_LOTS = [
-  { id: 'lot-1', gx: 4, gy: 4.1, label: 'Lote Noroeste' },
-  { id: 'lot-2', gx: 10.6, gy: 4.1, label: 'Lote Norte' },
-  { id: 'lot-3', gx: 17.8, gy: 4.1, label: 'Lote Nordeste' },
-  { id: 'lot-4', gx: 4, gy: 11.4, label: 'Lote Sudoeste' },
-  { id: 'lot-5', gx: 18.2, gy: 11.4, label: 'Lote Sudeste' }
+  { id: 'lot-1', u: 1.5, v: 3.1, label: 'Quadra Noroeste A' },
+  { id: 'lot-2', u: 8.0, v: 2.7, label: 'Quadra Norte Central' },
+  { id: 'lot-3', u: 13.0, v: 2.7, label: 'Quadra Norte Leste' },
+  { id: 'lot-4', u: 1.5, v: 8.2, label: 'Quadra Oeste A' },
+  { id: 'lot-5', u: 13.0, v: 8.0, label: 'Quadra Leste (Praça)' },
+  { id: 'lot-6', u: 3.7, v: 2.0, label: 'Quadra Noroeste B' },
+  { id: 'lot-7', u: 17.5, v: 2.7, label: 'Quadra Nordeste' },
+  { id: 'lot-8', u: 3.7, v: 7.2, label: 'Quadra Oeste B' },
+  { id: 'lot-9', u: 17.5, v: 8.0, label: 'Quadra Leste B' },
+  { id: 'lot-10', u: 2.5, v: 13.0, label: 'Quadra Sudoeste' },
+  { id: 'lot-11', u: 8.0, v: 13.0, label: 'Quadra Sul Central' },
+  { id: 'lot-12', u: 17.5, v: 13.0, label: 'Quadra Sudeste' }
 ];
 
 export const DEFAULT_CLINICAL_ROOMS = [

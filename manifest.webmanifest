@@ -1,9 +1,24 @@
 {
-  "name": "Cidade Palácio Mental",
-  "short_name": "PalácioMental",
+  "name": "The Reds",
+  "short_name": "The Reds",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#0f172a",
-  "theme_color": "#0f172a",
-  "description": "Palácio Mental em Pixel Art para estudos de Medicina com Cidade Viva."
+  "theme_color": "#182235",
+  "description": "The Reds — Palácio Mental Isométrico 2.5D para Medicina com Cidade Viva.",
+  "icons": [
+    {
+      "src": "/assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
 }

@@ -2,6 +2,9 @@ import {
   OBJECT_CATALOG,
   FLOORPLAN_PRESETS,
   ROOM_THEMES,
+  CITY_GRID,
+  cityIso,
+  screenToCityIso,
   CITY_LOTS,
   DEFAULT_CLINICAL_ROOMS,
   createDefaultRoomCells,
@@ -17,6 +20,7 @@ import {
 import {
   drawIsoBox,
   drawIllustratedCityLandscape,
+  drawIsoLotEmpty,
   drawPixelBuilding,
   drawHouse,
   drawMuseum,
@@ -30,6 +34,7 @@ import {
   exportSpriteToDataUrl,
   createMnemonicSpriteCanvas
 } from './sprites.js';
+import { sliceSpriteSheet, mergeSlicedBoxes } from './sheetSlicer.js';
 import { generateFreeAiSprite } from './imageGen.js';
 import { ambientMusic } from './audio.js';
 import {
@@ -51,10 +56,10 @@ let canvasCssW = 800;
 let canvasCssH = 600;
 let dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-// Dimensões fixas do mundo (24x16 tiles de 48px = 1152x768)
+// Dimensões do mundo isométrico da cidade (12 quadras organizadas + mar + montanhas)
 const TILE = 48;
-const WORLD_W = 24 * TILE;
-const WORLD_H = 16 * TILE;
+const WORLD_W = 1800;
+const WORLD_H = 1080;
 
 let state = loadState();
 if (!Array.isArray(state.customCatalog)) state.customCatalog = [];
@@ -71,10 +76,11 @@ let view = {
 };
 
 // Câmera da cidade e câmera interna (recepção/quarto)
+const initialPlazaPos = cityIso(8.0, 5.5);
 const cam = {
-  x: WORLD_W / 2,
-  y: WORLD_H / 2,
-  zoom: 1,
+  x: 920,
+  y: 495,
+  zoom: 0.95,
   dragging: false,
   lastX: 0,
   lastY: 0,
@@ -99,28 +105,29 @@ function clampInnerCam() {
   innerCam.y = Math.max(-560, Math.min(560, innerCam.y));
 }
 
-// Jogador e entidades vivas
-const player = { x: 12 * TILE, y: 9.5 * TILE, targetX: null, targetY: null, speed: 155 };
+// Jogador e entidades vivas alinhadas às avenidas isométricas
+const player = { x: initialPlazaPos.x, y: initialPlazaPos.y, targetX: null, targetY: null, speed: 175 };
 const roomPlayer = { gx: 3.5, gy: 4.5, targetGx: null, targetGy: null, speed: 3.4 };
 const keys = {};
 
 const cars = [
-  { x: 0, y: 8.1 * TILE, vx: 72, color: '#e07a5f', dir: 1 },
-  { x: WORLD_W - 40, y: 8.55 * TILE, vx: -62, color: '#eab308', dir: -1 },
-  { x: 14.08 * TILE, y: 2.6 * TILE, vy: 54, color: '#4d908e', dir: 1, vertical: true }
+  { axis: 'u', u: 1.4, v: 5.35, speed: 1.55, color: '#e07a5f' },
+  { axis: 'u', u: 17.5, v: 10.65, speed: -1.35, color: '#eab308' },
+  { axis: 'v', u: 10.5, v: 1.2, speed: 1.30, color: '#4d908e' },
+  { axis: 'v', u: 5.5, v: 13.0, speed: -1.20, color: '#6366f1' }
 ];
 
 const pedestrians = [
-  { x: 9 * TILE, y: 7.55 * TILE, vx: 22, minX: 6.5 * TILE, maxX: 13.4 * TILE, shirt: '#f472b6' },
-  { x: 15.6 * TILE, y: 9.35 * TILE, vx: -18, minX: 14.8 * TILE, maxX: 20.5 * TILE, shirt: '#facc15' },
-  { x: 10.6 * TILE, y: 9.85 * TILE, vx: 0, shirt: '#34d399' },
-  { x: 11.05 * TILE, y: 9.85 * TILE, vx: 0, shirt: '#fb923c' },
-  { x: 6.2 * TILE, y: 9.45 * TILE, vx: 15, minX: 4.5 * TILE, maxX: 9.2 * TILE, shirt: '#818cf8' }
+  { axis: 'u', u: 7.0, v: 4.92, min: 6.3, max: 9.7, speed: 0.45, shirt: '#f472b6' },
+  { axis: 'u', u: 13.2, v: 10.08, min: 11.4, max: 14.6, speed: -0.40, shirt: '#facc15' },
+  { axis: 'v', u: 6.08, v: 7.4, min: 6.4, max: 9.6, speed: 0.36, shirt: '#34d399' },
+  { axis: 'v', u: 9.92, v: 8.2, min: 6.4, max: 9.6, speed: -0.34, shirt: '#fb923c' },
+  { axis: 'u', u: 2.5, v: 10.08, min: 0.6, max: 4.6, speed: 0.42, shirt: '#818cf8' }
 ];
 
 const ducks = [
-  { x: 11.45 * TILE, y: 10.95 * TILE, angle: 0 },
-  { x: 12.05 * TILE, y: 11.18 * TILE, angle: 2.2 }
+  { u: 7.85, v: 7.95, angle: 0 },
+  { u: 8.38, v: 8.30, angle: 2.2 }
 ];
 
 let trafficLightGreen = true;
@@ -135,6 +142,7 @@ let selectedLayoutPresetId = FLOORPLAN_PRESETS[0].id;
 let layoutRotated = false;
 let movingObjectId = null;
 let hoveredRoomTile = null; // { gx, gy, occupied, inCells }
+let hoveredRoomWall = null; // { key, side, gx, gy, hidden }
 
 // ---------------- MULTIPLAYER ESTILO HABBO (ATÉ 10 PESSOAS) ----------------
 const urlParams = new URLSearchParams(window.location.search);
@@ -163,6 +171,7 @@ let myEmoteTimer = null;
 
 // Elementos de UI
 const breadcrumbEl = document.getElementById('breadcrumb');
+const btnInstallApp = document.getElementById('btnInstallApp');
 const btnFriends = document.getElementById('btnFriends');
 const btnAccount = document.getElementById('btnAccount');
 const btnDayNight = document.getElementById('btnDayNight');
@@ -176,6 +185,7 @@ const roomHud = document.getElementById('roomHud');
 const btnToggleEdit = document.getElementById('btnToggleEdit');
 const btnRoomRonda = document.getElementById('btnRoomRonda');
 const objectPaletteEl = document.getElementById('objectPalette');
+const builtinCatalogLabel = document.getElementById('builtinCatalogLabel');
 const customCatalogWrap = document.getElementById('customCatalogWrap');
 const customObjectPaletteEl = document.getElementById('customObjectPalette');
 const btnOpenSpriteStudio = document.getElementById('btnOpenSpriteStudio');
@@ -211,11 +221,57 @@ const layoutAreaInfo = document.getElementById('layoutAreaInfo');
 const btnExpandCol = document.getElementById('btnExpandCol');
 const btnExpandRow = document.getElementById('btnExpandRow');
 const btnRotatePreset = document.getElementById('btnRotatePreset');
+const btnShowAllWalls = document.getElementById('btnShowAllWalls');
+const btnHideAllWalls = document.getElementById('btnHideAllWalls');
 const btnResetViewFromLayout = document.getElementById('btnResetViewFromLayout');
 const themeGrid = document.getElementById('themeGrid');
 const inpRenameRoom = document.getElementById('inpRenameRoom');
 const btnRenameRoom = document.getElementById('btnRenameRoom');
+const btnDeleteCurrentRoom = document.getElementById('btnDeleteCurrentRoom');
 const roomObjectsList = document.getElementById('roomObjectsList');
+
+// Instalação como Aplicativo (PWA no celular / PC)
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  if (btnInstallApp) btnInstallApp.classList.remove('hidden');
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  if (btnInstallApp) btnInstallApp.classList.add('hidden');
+  showToast('📲 The Reds instalado no seu dispositivo!');
+});
+if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) {
+  if (btnInstallApp) btnInstallApp.classList.add('hidden');
+}
+if (btnInstallApp) {
+  btnInstallApp.onclick = async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      const res = await deferredInstallPrompt.userChoice;
+      if (res?.outcome === 'accepted') deferredInstallPrompt = null;
+      return;
+    }
+    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    openModal('📲 Instalar The Reds no Celular', `
+      <div style="display:flex;align-items:center;gap:12px;">
+        <img src="/assets/icon-192.png" style="width:58px;height:58px;border-radius:14px;border:1.5px solid rgba(239,68,68,0.5);" alt="The Reds" />
+        <div>
+          <strong>The Reds</strong>
+          <div style="font-size:12px;color:var(--muted)">Instale na tela inicial como aplicativo nativo com ícone próprio!</div>
+        </div>
+      </div>
+      <div class="card-box">
+        ${
+          isIos
+            ? '<strong>No iPhone / iPad (Safari):</strong><ol style="margin-left:18px;font-size:13px;display:flex;flex-direction:column;gap:4px;"><li>Toque no botão <strong>Compartilhar</strong> (quadrado com seta para cima) na barra do Safari.</li><li>Role e toque em <strong>Adicionar à Tela de Início</strong>.</li><li>Confirme em <strong>Adicionar</strong> — o ícone do <strong>The Reds</strong> aparece na sua tela!</li></ol>'
+            : '<strong>No Android (Chrome) ou PC:</strong><ol style="margin-left:18px;font-size:13px;display:flex;flex-direction:column;gap:4px;"><li>Toque no menu <strong>⋮</strong> (três pontinhos) no canto superior direito do navegador.</li><li>Toque em <strong>Instalar aplicativo</strong> ou <strong>Adicionar à tela inicial</strong>.</li><li>Confirme em <strong>Instalar</strong> — o ícone do <strong>The Reds</strong> aparece no celular!</li></ol>'
+        }
+      </div>
+    `);
+  };
+}
 
 // ---------------- TOASTS & INTERAÇÕES MULTIPLAYER ----------------
 function showToast(message, actionLabel = '', onAction = null, durationMs = 4800) {
@@ -507,7 +563,7 @@ function screenToWorld(sx, sy) {
 function updateTopbar() {
   btnDayNight.textContent = state.isNight ? '🌙' : '☀️';
   if (view.mode === 'city') {
-    breadcrumbEl.textContent = 'Cidade Médica';
+    breadcrumbEl.textContent = 'The Reds';
     btnBack.classList.add('hidden');
     btnRonda.classList.remove('hidden');
     cityHud.classList.remove('hidden');
@@ -518,7 +574,7 @@ function updateTopbar() {
     updateCityStatusPill();
   } else if (view.mode === 'reception') {
     const b = getCurrentBuilding();
-    breadcrumbEl.textContent = `Cidade → ${b ? b.name : ''} (Recepção)`;
+    breadcrumbEl.textContent = `The Reds → ${b ? b.name : ''} (Recepção)`;
     btnBack.classList.remove('hidden');
     btnRonda.classList.add('hidden');
     cityHud.classList.add('hidden');
@@ -665,6 +721,75 @@ function expandRoomRow(room) {
 }
 
 // ---------------- ESTÚDIO DE EDIÇÃO DO QUARTO ----------------
+function isWallToolActive() {
+  return editMode && editorTab === 'layout' && selectedLayoutPresetId === 'wall-toggle';
+}
+
+function getExposedBackWalls(room) {
+  const cells = ensureRoomCells(room);
+  const walls = [];
+  for (const k of Object.keys(cells)) {
+    const [gx, gy] = k.split(',').map(Number);
+    if (!cells[`${gx - 1},${gy}`]) {
+      walls.push({ key: `L:${gx},${gy}`, side: 'L', gx, gy });
+    }
+    if (!cells[`${gx},${gy - 1}`]) {
+      walls.push({ key: `R:${gx},${gy}`, side: 'R', gx, gy });
+    }
+  }
+  return walls;
+}
+
+function findHoveredWall(room, clientX, clientY) {
+  if (!room || !canvas._roomGrid) return null;
+  const { originX, originY, tileW, tileH } = canvas._roomGrid;
+  const rect = canvas.getBoundingClientRect();
+  const cx = clientX - rect.left;
+  const cy = clientY - rect.top;
+  const ix = (cx - (canvasCssW / 2 + innerCam.x)) / innerCam.zoom + canvasCssW / 2;
+  const iy = (cy - (canvasCssH / 2 + innerCam.y)) / innerCam.zoom + canvasCssH / 2;
+  const wallH = Math.floor(tileW * 1.24);
+  const hidden = room.hiddenWalls || {};
+
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const w of getExposedBackWalls(room)) {
+    const a = isoToScreen(w.gx, w.gy, originX, originY, tileW, tileH);
+    const b =
+      w.side === 'L'
+        ? isoToScreen(w.gx, w.gy + 1, originX, originY, tileW, tileH)
+        : isoToScreen(w.gx + 1, w.gy, originX, originY, tileW, tileH);
+
+    const dx = b.x - a.x;
+    if (Math.abs(dx) < 1) continue;
+    const t = (ix - a.x) / dx;
+    if (t < -0.06 || t > 1.06) continue;
+    const baseY = a.y + (b.y - a.y) * Math.max(0, Math.min(1, t));
+    if (iy >= baseY - wallH - 10 && iy <= baseY + 12) {
+      const score = w.gx + w.gy - Math.abs(t - 0.5) * 0.25;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { ...w, hidden: Boolean(hidden[w.key]) };
+      }
+    }
+  }
+  return best;
+}
+
+function toggleWallSegment(room, wallHit) {
+  if (!room || !wallHit) return;
+  room.hiddenWalls = room.hiddenWalls || {};
+  if (room.hiddenWalls[wallHit.key]) {
+    delete room.hiddenWalls[wallHit.key];
+    showToast('🧱 Parede recolocada!');
+  } else {
+    room.hiddenWalls[wallHit.key] = true;
+    showToast('🧱 Parede apagada! (clique de novo para recolocar)');
+  }
+  persistState();
+}
+
 function setEditMode(on) {
   if (on && sharedRole === 'viewer') {
     showToast('Você entrou como Visitante neste mundo (somente leitura).');
@@ -673,6 +798,7 @@ function setEditMode(on) {
   editMode = Boolean(on);
   movingObjectId = null;
   hoveredRoomTile = null;
+  hoveredRoomWall = null;
   if (editMode) {
     roomEditorPanel.classList.remove('collapsed');
     btnToggleDrawer.textContent = '▾';
@@ -684,6 +810,7 @@ function setEditMode(on) {
 function setEditorTab(tab) {
   editorTab = tab;
   movingObjectId = null;
+  hoveredRoomWall = null;
   document.querySelectorAll('.editor-tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.editorTab === tab);
   });
@@ -711,7 +838,9 @@ function updateEditorBanner() {
     }
   } else if (editorTab === 'layout') {
     const { preset, w, h } = getActivePresetDims();
-    if (preset.zone === 'erase') {
+    if (preset.zone === 'wall') {
+      editBannerText.textContent = 'Paredes: clique diretamente em qualquer parede para apagar ou num pontilhado para recolocar';
+    } else if (preset.zone === 'erase') {
       editBannerText.textContent = 'Planta: toque em um ladrilho sem móveis para remover';
     } else {
       editBannerText.textContent = `Planta (${preset.shortName} ${w}×${h}): clique ao lado do quarto ou corredor para acoplar`;
@@ -727,13 +856,21 @@ function renderFloorplanPresets() {
     const w = layoutRotated ? p.h : p.w;
     const h = layoutRotated ? p.w : p.h;
     const card = document.createElement('button');
-    card.className = `preset-card ${p.zone === 'erase' ? 'danger' : ''} ${p.id === selectedLayoutPresetId ? 'active' : ''}`;
+    const extraCls = p.zone === 'erase' ? 'danger' : p.zone === 'wall' ? 'wall-tool' : '';
+    card.className = `preset-card ${extraCls} ${p.id === selectedLayoutPresetId ? 'active' : ''}`;
+    const subTxt =
+      p.zone === 'erase'
+        ? 'Apagar piso'
+        : p.zone === 'wall'
+          ? 'Clique na parede'
+          : `${w} × ${h} ladrilhos`;
     card.innerHTML = `
       <strong>${p.icon} ${p.shortName}</strong>
-      <small>${p.zone === 'erase' ? 'Apagar piso' : `${w} × ${h} ladrilhos`}</small>
+      <small>${subTxt}</small>
     `;
     card.onclick = () => {
       selectedLayoutPresetId = p.id;
+      hoveredRoomWall = null;
       renderFloorplanPresets();
       updateEditorBanner();
     };
@@ -872,6 +1009,7 @@ function openDecayConfigModal(building) {
 function openReceptionModal() {
   const b = getCurrentBuilding();
   if (!b) return;
+  const canEdit = sharedRole !== 'viewer';
   const cond = getBuildingCondition(b, state.decayThresholdDays);
   const condText = cond === 'new' ? 'Novo (em dia)' : cond === 'worn' ? 'Meio desgastado' : 'Velho (precisa revisar!)';
   const condClass = cond === 'new' ? 'status-new' : cond === 'worn' ? 'status-worn' : 'status-old';
@@ -879,97 +1017,214 @@ function openReceptionModal() {
   const wrap = document.createElement('div');
   wrap.className = 'card-box';
   wrap.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div class="crud-row-head">
       <div>
         <strong>Recepção — ${escapeHtml(b.name)}</strong><br/>
-        <small style="color:var(--muted)">Quadro de Índice dos Andares na Parede</small>
+        <small style="color:var(--muted)">Quadro de Índice: crie, renomeie ou exclua andares, apartamentos e quartos</small>
       </div>
-      <span class="status-pill ${condClass}">${condText}</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="status-pill ${condClass}">${condText}</span>
+        ${canEdit ? '<button id="btnRecEditBuilding" class="btn-ghost btn-sm" title="Editar ou excluir este prédio">✏️ Prédio</button>' : ''}
+      </div>
     </div>
   `;
 
   if (b.floors.length === 0) {
     const empty = document.createElement('p');
+    empty.style.color = 'var(--muted)';
     empty.textContent = 'Nenhum andar criado ainda. Adicione o 1º andar abaixo.';
     wrap.appendChild(empty);
   } else {
     b.floors.forEach((f) => {
       const fBox = document.createElement('div');
       fBox.className = 'card-box';
-      fBox.innerHTML = `<strong>${escapeHtml(f.name)}</strong>`;
+
+      const fHead = document.createElement('div');
+      fHead.className = 'crud-row-head';
+      fHead.innerHTML = `<strong>🏢 ${escapeHtml(f.name)}</strong>`;
+      if (canEdit) {
+        const fActs = document.createElement('div');
+        fActs.className = 'crud-mini-actions';
+        const renF = document.createElement('button');
+        renF.className = 'btn-ghost btn-sm';
+        renF.title = 'Renomear andar';
+        renF.textContent = '✏️';
+        renF.onclick = () => {
+          const next = prompt('Novo nome do andar:', f.name);
+          if (!next || !next.trim()) return;
+          f.name = next.trim();
+          persistState();
+          openReceptionModal();
+        };
+        const delF = document.createElement('button');
+        delF.className = 'btn-ghost btn-sm';
+        delF.title = 'Excluir andar';
+        delF.textContent = '🗑️';
+        delF.onclick = () => {
+          if (!confirm(`Excluir o andar "${f.name}" e todos os seus apartamentos e quartos?`)) return;
+          b.floors = b.floors.filter((x) => x.id !== f.id);
+          persistState();
+          openReceptionModal();
+          showToast(`🗑️ Andar "${f.name}" excluído.`);
+        };
+        fActs.appendChild(renF);
+        fActs.appendChild(delF);
+        fHead.appendChild(fActs);
+      }
+      fBox.appendChild(fHead);
+
       f.apartments.forEach((ap) => {
         const apRow = document.createElement('div');
-        apRow.style.marginTop = '6px';
-        apRow.innerHTML = `<div style="font-size:13px;color:var(--accent);margin-bottom:4px;">🚪 Apartamento: <strong>${escapeHtml(ap.name)}</strong></div>`;
+        apRow.style.marginTop = '8px';
+        apRow.style.paddingTop = '6px';
+        apRow.style.borderTop = '1px solid var(--border-soft)';
+
+        const apHead = document.createElement('div');
+        apHead.className = 'crud-row-head';
+        apHead.style.marginBottom = '6px';
+        apHead.innerHTML = `<div style="font-size:13px;color:var(--accent);">🚪 Apartamento: <strong>${escapeHtml(ap.name)}</strong></div>`;
+        if (canEdit) {
+          const apActs = document.createElement('div');
+          apActs.className = 'crud-mini-actions';
+          const renAp = document.createElement('button');
+          renAp.className = 'btn-ghost btn-sm';
+          renAp.title = 'Renomear apartamento';
+          renAp.textContent = '✏️';
+          renAp.onclick = () => {
+            const next = prompt('Novo nome do apartamento / doença:', ap.name);
+            if (!next || !next.trim()) return;
+            ap.name = next.trim();
+            persistState();
+            openReceptionModal();
+          };
+          const delAp = document.createElement('button');
+          delAp.className = 'btn-ghost btn-sm';
+          delAp.title = 'Excluir apartamento';
+          delAp.textContent = '🗑️';
+          delAp.onclick = () => {
+            if (!confirm(`Excluir o apartamento "${ap.name}" e todos os seus quartos?`)) return;
+            f.apartments = f.apartments.filter((x) => x.id !== ap.id);
+            persistState();
+            openReceptionModal();
+            showToast(`🗑️ Apartamento "${ap.name}" excluído.`);
+          };
+          apActs.appendChild(renAp);
+          apActs.appendChild(delAp);
+          apHead.appendChild(apActs);
+        }
+        apRow.appendChild(apHead);
+
         const btnWrap = document.createElement('div');
         btnWrap.className = 'row-actions';
         ap.rooms.forEach((rm) => {
+          const chip = document.createElement('div');
+          chip.className = 'room-chip-wrap';
+
           const btn = document.createElement('button');
-          btn.className = rm.isBibliography ? 'btn-secondary' : 'btn-primary';
+          btn.className = rm.isBibliography ? 'btn-secondary btn-sm' : 'btn-primary btn-sm';
           btn.textContent = rm.isBibliography ? `📚 ${rm.name}` : `${rm.name} (${rm.objects.length})`;
           btn.onclick = () => {
             closeModal();
             enterRoom(b.id, f.id, ap.id, rm.id);
           };
-          btnWrap.appendChild(btn);
+          chip.appendChild(btn);
+
+          if (canEdit) {
+            const renR = document.createElement('button');
+            renR.className = 'chip-act';
+            renR.title = 'Renomear quarto';
+            renR.textContent = '✏️';
+            renR.onclick = () => {
+              const next = prompt('Novo nome do quarto:', rm.name);
+              if (!next || !next.trim()) return;
+              rm.name = next.trim();
+              persistState();
+              openReceptionModal();
+            };
+            const delR = document.createElement('button');
+            delR.className = 'chip-act del';
+            delR.title = 'Excluir quarto';
+            delR.textContent = '✕';
+            delR.onclick = () => {
+              if (!confirm(`Excluir o quarto "${rm.name}" (${rm.objects.length} objetos)?`)) return;
+              ap.rooms = ap.rooms.filter((x) => x.id !== rm.id);
+              persistState();
+              openReceptionModal();
+              showToast(`🗑️ Quarto "${rm.name}" excluído.`);
+            };
+            chip.appendChild(renR);
+            chip.appendChild(delR);
+          }
+
+          btnWrap.appendChild(chip);
         });
-        const addRoomBtn = document.createElement('button');
-        addRoomBtn.className = 'btn-secondary';
-        addRoomBtn.textContent = '+ Cômodo/Quarto';
-        addRoomBtn.onclick = () => {
-          const name = prompt('Nome do novo cômodo/quarto (ex: Complicações, Quarto da Aguda):');
-          if (!name) return;
-          ap.rooms.push({ id: uid('r'), name: name.trim(), theme: 'clinic', objects: [] });
-          persistState();
-          openReceptionModal();
-        };
-        btnWrap.appendChild(addRoomBtn);
+
+        if (canEdit) {
+          const addRoomBtn = document.createElement('button');
+          addRoomBtn.className = 'btn-secondary btn-sm';
+          addRoomBtn.textContent = '+ Quarto';
+          addRoomBtn.onclick = () => {
+            const name = prompt('Nome do novo cômodo/quarto (ex: Complicações, Quarto da Aguda):');
+            if (!name || !name.trim()) return;
+            ap.rooms.push({ id: uid('r'), name: name.trim(), theme: 'clinic', objects: [] });
+            persistState();
+            openReceptionModal();
+          };
+          btnWrap.appendChild(addRoomBtn);
+        }
         apRow.appendChild(btnWrap);
         fBox.appendChild(apRow);
       });
 
-      const addApBtn = document.createElement('button');
-      addApBtn.className = 'btn-secondary';
-      addApBtn.textContent = '+ Novo Apartamento (Doença)';
-      addApBtn.onclick = () => {
-        const name = prompt('Nome da doença / apartamento (ex: Asma, DPOC):');
-        if (!name) return;
-        f.apartments.push({
-          id: uid('a'),
-          name: name.trim(),
-          rooms: DEFAULT_CLINICAL_ROOMS.map((rn) => ({
-            id: uid('r'),
-            name: rn,
-            theme: rn === 'Bibliografia' ? 'library' : 'clinic',
-            isBibliography: rn === 'Bibliografia',
-            pdfs: rn === 'Bibliografia' ? [] : undefined,
-            objects: []
-          }))
-        });
-        persistState();
-        openReceptionModal();
-      };
-      fBox.appendChild(addApBtn);
+      if (canEdit) {
+        const addApBtn = document.createElement('button');
+        addApBtn.className = 'btn-secondary btn-sm';
+        addApBtn.style.alignSelf = 'flex-start';
+        addApBtn.textContent = '+ Novo Apartamento (Doença)';
+        addApBtn.onclick = () => {
+          const name = prompt('Nome da doença / apartamento (ex: Asma, DPOC):');
+          if (!name || !name.trim()) return;
+          f.apartments.push({
+            id: uid('a'),
+            name: name.trim(),
+            rooms: DEFAULT_CLINICAL_ROOMS.map((rn) => ({
+              id: uid('r'),
+              name: rn,
+              theme: rn === 'Bibliografia' ? 'library' : 'clinic',
+              isBibliography: rn === 'Bibliografia',
+              pdfs: rn === 'Bibliografia' ? [] : undefined,
+              objects: []
+            }))
+          });
+          persistState();
+          openReceptionModal();
+        };
+        fBox.appendChild(addApBtn);
+      }
       wrap.appendChild(fBox);
     });
   }
 
-  const actions = document.createElement('div');
-  actions.className = 'row-actions';
-  const addFloorBtn = document.createElement('button');
-  addFloorBtn.className = 'btn-primary';
-  addFloorBtn.textContent = '+ Adicionar Andar';
-  addFloorBtn.onclick = () => {
-    const name = prompt(`Nome do novo andar em ${b.name} (ex: 3º Andar — Arritmias):`);
-    if (!name) return;
-    b.floors.push({ id: uid('f'), name: name.trim(), apartments: [] });
-    persistState();
-    openReceptionModal();
-  };
-  actions.appendChild(addFloorBtn);
-  wrap.appendChild(actions);
+  if (canEdit) {
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const addFloorBtn = document.createElement('button');
+    addFloorBtn.className = 'btn-primary';
+    addFloorBtn.textContent = '+ Adicionar Andar';
+    addFloorBtn.onclick = () => {
+      const name = prompt(`Nome do novo andar em ${b.name} (ex: 3º Andar — Arritmias):`);
+      if (!name || !name.trim()) return;
+      b.floors.push({ id: uid('f'), name: name.trim(), apartments: [] });
+      persistState();
+      openReceptionModal();
+    };
+    actions.appendChild(addFloorBtn);
+    wrap.appendChild(actions);
+  }
 
   openModal(`🏥 Recepção: ${b.name}`, wrap);
+  const editBBtn = document.getElementById('btnRecEditBuilding');
+  if (editBBtn) editBBtn.onclick = () => openEditBuildingModal(b);
 }
 
 function enterRoom(buildingId, floorId, apartmentId, roomId) {
@@ -1231,26 +1486,38 @@ function openObjectModal(obj, room) {
   }
 }
 
-function openNewBuildingModal() {
+function openNewBuildingModal(preselectedLotId = null) {
+  if (sharedRole === 'viewer') {
+    showToast('Modo visitante: somente leitura.');
+    return;
+  }
   const usedLots = new Set(state.buildings.map((b) => b.lotId));
   const freeLots = CITY_LOTS.filter((l) => !usedLots.has(l.id));
 
   if (freeLots.length === 0) {
-    return openModal('Novo Prédio', '<p>Todos os lotes deste bairro já estão ocupados!</p>');
+    return openModal('Novo Prédio', '<p>Todos os 12 lotes desta cidade já estão ocupados! Você pode editar ou remover um prédio em 🏘️ Prédios.</p>');
   }
 
   const wrap = document.createElement('div');
   wrap.innerHTML = `
-    <div class="field"><label>Especialidade / Matéria</label><input id="newBName" placeholder="Ex: Ginecologia, Pediatria" /></div>
+    <div class="field"><label>Especialidade / Matéria</label><input id="newBName" placeholder="Ex: Ginecologia, Pediatria, Infectologia" /></div>
     <div class="field">
-      <label>Lote na Cidade</label>
-      <select id="newBLot">${freeLots.map((l) => `<option value="${l.id}">${l.label}</option>`).join('')}</select>
+      <label>Quadra / Lote na Cidade (${freeLots.length} livres)</label>
+      <select id="newBLot">${freeLots
+        .map((l) => `<option value="${l.id}" ${l.id === preselectedLotId ? 'selected' : ''}>${l.label}</option>`)
+        .join('')}</select>
     </div>
-    <div class="field">
-      <label>Cor de Destaque do Prédio</label>
-      <input id="newBColor" type="color" value="#10b981" style="height:38px;" />
+    <div style="display:flex;gap:8px;">
+      <div class="field" style="flex:1;">
+        <label>Cor de Destaque</label>
+        <input id="newBColor" type="color" value="#ef4444" style="height:38px;" />
+      </div>
+      <div class="field" style="flex:1;">
+        <label>Prazo de Revisão (dias)</label>
+        <input id="newBDecay" type="number" min="1" max="365" value="${state.decayThresholdDays || 14}" />
+      </div>
     </div>
-    <button id="btnCreateB" class="btn-primary">Construir Prédio com Recepção</button>
+    <button id="btnCreateB" class="btn-primary">🏗️ Construir Prédio com Recepção</button>
   `;
   openModal('🏗️ Novo Prédio de Estudo', wrap);
 
@@ -1259,18 +1526,169 @@ function openNewBuildingModal() {
     if (!name) return alert('Digite o nome da especialidade.');
     const lotId = document.getElementById('newBLot').value;
     const color = document.getElementById('newBColor').value;
+    const decayDays = Math.max(1, parseInt(document.getElementById('newBDecay').value, 10) || 14);
     state.buildings.push({
       id: uid('b'),
       name,
       lotId,
       color,
+      decayDays,
       lastReviewedAt: new Date().toISOString(),
       floors: []
     });
     persistState();
     updateCityStatusPill();
     closeModal();
+    showToast(`🏗️ Prédio "${name}" construído!`);
   };
+}
+
+function openEditBuildingModal(building) {
+  if (!building) return;
+  if (sharedRole === 'viewer') {
+    showToast('Modo visitante: somente leitura.');
+    return;
+  }
+  const usedByOthers = new Set(state.buildings.filter((b) => b.id !== building.id).map((b) => b.lotId));
+  const availLots = CITY_LOTS.filter((l) => !usedByOthers.has(l.id));
+  const curDecay = building.decayDays || state.decayThresholdDays || 14;
+
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="field"><label>Nome do Prédio / Especialidade</label><input id="editBName" value="${escapeHtml(building.name)}" /></div>
+    <div class="field">
+      <label>Quadra / Lote na Cidade</label>
+      <select id="editBLot">${availLots
+        .map((l) => `<option value="${l.id}" ${l.id === building.lotId ? 'selected' : ''}>${l.label}</option>`)
+        .join('')}</select>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <div class="field" style="flex:1;">
+        <label>Cor de Destaque</label>
+        <input id="editBColor" type="color" value="${building.color || '#ef4444'}" style="height:38px;" />
+      </div>
+      <div class="field" style="flex:1;">
+        <label>Prazo de Desgaste (dias)</label>
+        <input id="editBDecay" type="number" min="1" max="365" value="${curDecay}" />
+      </div>
+    </div>
+    <div class="row-actions" style="justify-content:space-between;margin-top:4px;">
+      <button id="btnSaveEditB" class="btn-success">💾 Salvar Alterações</button>
+      <button id="btnDeleteEditB" class="btn-danger">🗑️ Excluir Prédio</button>
+    </div>
+  `;
+  openModal(`✏️ Editar Prédio — ${building.name}`, wrap);
+
+  document.getElementById('btnSaveEditB').onclick = () => {
+    const name = document.getElementById('editBName').value.trim();
+    if (!name) return alert('Informe um nome válido.');
+    building.name = name;
+    building.lotId = document.getElementById('editBLot').value;
+    building.color = document.getElementById('editBColor').value;
+    building.decayDays = Math.max(1, parseInt(document.getElementById('editBDecay').value, 10) || 14);
+    persistState();
+    updateTopbar();
+    updateCityStatusPill();
+    closeModal();
+    showToast(`✅ Prédio "${name}" atualizado!`);
+  };
+
+  document.getElementById('btnDeleteEditB').onclick = () => {
+    const floorsCount = building.floors?.length || 0;
+    if (!confirm(`Excluir permanentemente o prédio "${building.name}" (${floorsCount} andares) e todos os seus quartos?`)) return;
+    state.buildings = state.buildings.filter((x) => x.id !== building.id);
+    persistState();
+    closeModal();
+    if (view.buildingId === building.id) {
+      goHome();
+    } else {
+      updateCityStatusPill();
+    }
+    showToast(`🗑️ Prédio "${building.name}" excluído.`);
+  };
+}
+
+function openManageBuildingsModal() {
+  const canEdit = sharedRole !== 'viewer';
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<p style="font-size:12.5px;color:var(--muted);">Gerencie todos os prédios da sua cidade (${state.buildings.length}/${CITY_LOTS.length} lotes ocupados):</p>`;
+
+  const list = document.createElement('div');
+  list.style.display = 'flex';
+  list.style.flexDirection = 'column';
+  list.style.gap = '8px';
+
+  if (state.buildings.length === 0) {
+    list.innerHTML = '<div class="card-box"><small style="color:var(--muted)">Nenhum prédio criado ainda.</small></div>';
+  } else {
+    state.buildings.forEach((b) => {
+      const lot = CITY_LOTS.find((l) => l.id === b.lotId);
+      const cond = getBuildingCondition(b, state.decayThresholdDays);
+      const condCls = cond === 'new' ? 'status-new' : cond === 'worn' ? 'status-worn' : 'status-old';
+      const condTxt = cond === 'new' ? 'Em dia' : cond === 'worn' ? 'Desgastado' : 'Velho';
+      const totalRooms = (b.floors || []).reduce(
+        (acc, f) => acc + (f.apartments || []).reduce((a2, ap) => a2 + (ap.rooms || []).length, 0),
+        0
+      );
+
+      const card = document.createElement('div');
+      card.className = 'card-box';
+      card.innerHTML = `
+        <div class="crud-row-head">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="peer-color-dot" style="width:13px;height:13px;background:${b.color || '#ef4444'}"></span>
+            <div>
+              <strong>${escapeHtml(b.name)}</strong>
+              <div style="font-size:11px;color:var(--muted)">${escapeHtml(lot?.label || 'Sem lote')} • ${b.floors?.length || 0} andares • ${totalRooms} quartos</div>
+            </div>
+          </div>
+          <span class="status-pill ${condCls}">${condTxt}</span>
+        </div>
+        <div class="row-actions">
+          <button class="btn-primary btn-sm" data-enter-b="${b.id}">🚪 Entrar</button>
+          ${canEdit ? `<button class="btn-secondary btn-sm" data-edit-b="${b.id}">✏️ Editar</button>` : ''}
+          ${canEdit ? `<button class="btn-ghost btn-sm" data-del-b="${b.id}">🗑️ Excluir</button>` : ''}
+        </div>
+      `;
+      list.appendChild(card);
+    });
+  }
+  wrap.appendChild(list);
+
+  if (canEdit) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn-primary';
+    addBtn.textContent = '+ Novo Prédio';
+    addBtn.onclick = () => openNewBuildingModal();
+    wrap.appendChild(addBtn);
+  }
+
+  openModal('🏘️ Gerenciar Prédios — The Reds', wrap);
+
+  wrap.querySelectorAll('[data-enter-b]').forEach((btn) => {
+    btn.onclick = () => {
+      closeModal();
+      enterBuilding(btn.dataset.enterB);
+    };
+  });
+  wrap.querySelectorAll('[data-edit-b]').forEach((btn) => {
+    btn.onclick = () => {
+      const b = state.buildings.find((x) => x.id === btn.dataset.editB);
+      if (b) openEditBuildingModal(b);
+    };
+  });
+  wrap.querySelectorAll('[data-del-b]').forEach((btn) => {
+    btn.onclick = () => {
+      const b = state.buildings.find((x) => x.id === btn.dataset.delB);
+      if (!b) return;
+      if (!confirm(`Excluir permanentemente o prédio "${b.name}" e todos os seus andares e quartos?`)) return;
+      state.buildings = state.buildings.filter((x) => x.id !== b.id);
+      persistState();
+      updateCityStatusPill();
+      openManageBuildingsModal();
+      showToast(`🗑️ Prédio "${b.name}" excluído.`);
+    };
+  });
 }
 
 // ---------------- GEOMETRIA ISOMÉTRICA ----------------
@@ -1403,10 +1821,10 @@ function renderReception(now) {
   ctx.restore();
 }
 
-// ---------------- RENDERIZAÇÃO DA CIDADE (ILUSTRADA 2.5D + MARCOS PERMANENTES) ----------------
+// ---------------- RENDERIZAÇÃO DA CIDADE (ISOMÉTRICA 2.5D REAL + 12 QUADRAS + MARCOS FIXOS) ----------------
 function renderCity(now) {
   ctx.save();
-  ctx.fillStyle = state.isNight ? '#0b1120' : '#3684a8';
+  ctx.fillStyle = state.isNight ? '#091a2c' : '#3a86ab';
   ctx.fillRect(0, 0, canvasCssW, canvasCssH);
 
   ctx.translate(canvasCssW / 2, canvasCssH / 2);
@@ -1417,7 +1835,7 @@ function renderCity(now) {
   const vitality = getCityVitality();
   const allOld = vitality === 0;
 
-  // Cenário ilustrado completo (montanhas, gramado texturizado, avenidas com calçadas, praça, praia e mar)
+  // Cenário isométrico completo (ilha 3D, montanhas, 12 quadras, avenidas diagonais, praça central e praia)
   drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, TILE, {
     isNight: state.isNight,
     trafficLightGreen,
@@ -1427,83 +1845,86 @@ function renderCity(now) {
     hasPier: Boolean(mayor.pier)
   });
 
-  // Lotes vazios elegantes
+  // Lotes livres isométricos (clicáveis para construir!)
   CITY_LOTS.forEach((lot) => {
     const occupied = state.buildings.some((b) => b.lotId === lot.id);
     if (!occupied) {
-      ctx.save();
-      ctx.fillStyle = 'rgba(248, 245, 232, 0.22)';
-      ctx.strokeStyle = 'rgba(43, 37, 32, 0.45)';
-      ctx.lineWidth = 1.6;
-      ctx.setLineDash([6, 5]);
-      ctx.beginPath();
-      ctx.roundRect(lot.gx * TILE - 4, lot.gy * TILE + 8, 94, 68, 12);
-      ctx.fill();
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(43, 37, 32, 0.72)';
-      ctx.font = 'bold 10px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Lote Livre', lot.gx * TILE + 43, lot.gy * TILE + 46);
-      ctx.restore();
+      drawIsoLotEmpty(ctx, lot.u, lot.v, state.isNight);
     }
   });
 
-  // Ordenação vertical de profundidade (Y) para prédios, casas, museu, árvores e pessoas
+  // Ordenação de profundidade (Y de tela) para prédios, casas, museu, árvores, carros e pessoas
   const cityEntities = [];
 
-  // Casinhas base
+  // Casinhas organizadas nas quadras residenciais (alinhadas às ruas, sem flutuar!)
   [
-    [1.4, 9.8, '#d97b48'],
-    [6.6, 10.2, '#e07a5f'],
-    [20.4, 9.7, '#d97b48']
-  ].forEach(([gx, gy, col]) => {
-    cityEntities.push({ y: gy * TILE + 48, draw: () => drawHouse(ctx, gx * TILE, gy * TILE, col, state.isNight) });
+    [1.2, 11.9, '#d97b48'],
+    [3.8, 11.9, '#e07a5f'],
+    [14.1, 13.8, '#d97b48'],
+    [16.5, 11.8, '#e07a5f']
+  ].forEach(([hu, hv, col]) => {
+    const p = cityIso(hu, hv);
+    cityEntities.push({ y: p.y + 18, draw: () => drawHouse(ctx, hu, hv, col, state.isNight) });
   });
 
   // Marcos PERMANENTES inaugurados pelo Prefeito (nunca desaparecem mesmo sem revisar!)
   if (mayor.museum) {
-    cityEntities.push({ y: 10.1 * TILE + 66, draw: () => drawMuseum(ctx, 15.6 * TILE, 10.1 * TILE, state.isNight) });
+    const mp = cityIso(12.8, 12.6);
+    cityEntities.push({ y: mp.y + 30, draw: () => drawMuseum(ctx, 12.8, 12.6, state.isNight) });
   }
   if (mayor.residences) {
-    cityEntities.push({ y: 4.3 * TILE + 48, draw: () => drawHouse(ctx, 21.1 * TILE, 4.3 * TILE, '#6366f1', state.isNight) });
-    cityEntities.push({ y: 11.7 * TILE + 48, draw: () => drawHouse(ctx, 7.6 * TILE, 11.7 * TILE, '#84cc16', state.isNight) });
+    [
+      [18.8, 11.8, '#6366f1'],
+      [1.2, 13.9, '#84cc16']
+    ].forEach(([hu, hv, col]) => {
+      const p = cityIso(hu, hv);
+      cityEntities.push({ y: p.y + 18, draw: () => drawHouse(ctx, hu, hv, col, state.isNight) });
+    });
   }
 
-  // Árvores ilustradas do bairro
-  [[1.2, 3.6], [8.1, 4.4], [15.4, 4.5], [21.8, 6.2], [9.3, 12.2], [14.7, 12.1], [22.1, 11.6]].forEach(([gx, gy]) => {
-    cityEntities.push({ y: gy * TILE + 36, draw: () => drawTree(ctx, gx * TILE, gy * TILE, allOld, state.isNight) });
+  // Árvores organizadas nos cantos das quadras e da praça
+  [
+    [0.7, 0.8], [4.3, 0.8], [6.6, 0.9], [9.4, 0.9],
+    [11.6, 0.9], [14.4, 0.9], [16.6, 0.9], [19.2, 0.9],
+    [6.6, 9.4], [9.4, 6.6], [6.6, 14.2], [11.6, 14.2], [19.2, 14.2]
+  ].forEach(([tu, tv]) => {
+    const tp = cityIso(tu, tv);
+    cityEntities.push({ y: tp.y + 12, draw: () => drawTree(ctx, tu, tv, allOld, state.isNight) });
   });
 
-  // Prédios clicáveis das especialidades
+  // Prédios clicáveis das especialidades (apoiados em fundações isométricas!)
   state.buildings.forEach((b) => {
     const lot = CITY_LOTS.find((l) => l.id === b.lotId);
     if (!lot) return;
     const cond = getBuildingCondition(b, state.decayThresholdDays);
+    const bp = cityIso(lot.u, lot.v);
     cityEntities.push({
-      y: lot.gy * TILE + 80,
-      draw: () => drawPixelBuilding(ctx, lot.gx * TILE, lot.gy * TILE, 86, 76, b.color, cond, state.isNight, b.name)
+      y: bp.y + 32,
+      draw: () => drawPixelBuilding(ctx, lot.u, lot.v, b.color, cond, state.isNight, b.name)
     });
   });
 
-  // Pessoas da cidade (somem se todos os prédios ficarem abandonados/velhos; voltam ao revisar!)
+  // Pessoas caminhando nas calçadas isométricas (diminuem se a cidade ficar abandonada)
   const visiblePedCount = Math.round(pedestrians.length * vitality);
   pedestrians.slice(0, visiblePedCount).forEach((p) => {
-    cityEntities.push({ y: p.y + 8, draw: () => drawAvatar(ctx, p.x, p.y, p.shirt, '', '', 0.92) });
+    const pp = cityIso(p.u, p.v);
+    cityEntities.push({ y: pp.y + 6, draw: () => drawAvatar(ctx, pp.x, pp.y, p.shirt, '', '', 0.86) });
   });
 
-  // Pescador aparece se o Pier foi inaugurado E a cidade ainda tem movimento (vitalidade > 0)
+  // Pescador no pier (se o Pier foi inaugurado e há movimento na cidade)
   if (mayor.pier && vitality > 0) {
+    const fp = cityIso(10.1, CITY_GRID.rows + 1.55);
     cityEntities.push({
-      y: 13.95 * TILE + 8,
-      draw: () => drawAvatar(ctx, 11.75 * TILE, 13.95 * TILE, '#0ea5e9', 'Pescador', '', 0.95)
+      y: fp.y + 8,
+      draw: () => drawAvatar(ctx, fp.x, fp.y, '#0ea5e9', 'Pescador', '', 0.88)
     });
   }
 
-  // Carros (menos carros se a cidade estiver abandonada)
+  // Carros trafegando nas avenidas isométricas diagonais
   const visibleCars = vitality === 0 ? cars.slice(0, 1) : cars;
   visibleCars.forEach((c) => {
-    cityEntities.push({ y: c.y + 16, draw: () => drawCar(ctx, c.x, c.y, c.color, !c.vertical) });
+    const cp = cityIso(c.u, c.v);
+    cityEntities.push({ y: cp.y + 8, draw: () => drawCar(ctx, cp.x, cp.y, c.color, c.axis) });
   });
 
   // Colegas conectados na cidade
@@ -1511,11 +1932,11 @@ function renderCity(now) {
     if (peer.id === myPeerId) return;
     if (!peer.mode || peer.mode === 'city') {
       const sp = peerSmoothPos.get(peer.id);
-      const px = sp ? sp.x : (peer.x || 12 * TILE);
-      const py = sp ? sp.y : (peer.y || 9.5 * TILE);
+      const px = sp ? sp.x : (peer.x || initialPlazaPos.x);
+      const py = sp ? sp.y : (peer.y || initialPlazaPos.y);
       cityEntities.push({
         y: py + 10,
-        draw: () => drawAvatar(ctx, px, py, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', 1.06, true)
+        draw: () => drawAvatar(ctx, px, py, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '', 0.98, true)
       });
     }
   });
@@ -1523,7 +1944,7 @@ function renderCity(now) {
   // Avatar do jogador
   cityEntities.push({
     y: player.y + 10,
-    draw: () => drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote, 1.06)
+    draw: () => drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote, 0.98)
   });
 
   cityEntities.sort((a, b) => a.y - b.y);
@@ -1571,11 +1992,13 @@ function renderRoom() {
 
   const movingObj = movingObjectId ? room.objects.find((o) => o.id === movingObjectId) : null;
 
-  // Prévia de colocação de móvel (aba add/move) ou prévia de bloco de planta (aba layout)
+  const wallTool = isWallToolActive();
+
+  // Prévia de colocação de móvel (aba add/move) ou prévia de bloco de planta (aba layout, exceto parede)
   let ghost = null;
   let layoutPreview = null;
 
-  if (editMode && hoveredRoomTile) {
+  if (editMode && hoveredRoomTile && !wallTool) {
     if (editorTab === 'layout') {
       layoutPreview = computeLayoutStampTiles(hoveredRoomTile.gx, hoveredRoomTile.gy);
     } else if (hoveredRoomTile.inCells && !hoveredRoomTile.occupied) {
@@ -1629,6 +2052,9 @@ function renderRoom() {
     avatars: roomAvatars,
     ghost,
     layoutPreview,
+    hiddenWalls: room.hiddenWalls || {},
+    wallToolActive: wallTool,
+    hoveredWall: wallTool ? hoveredRoomWall : null,
     originX,
     originY,
     tileW,
@@ -1636,7 +2062,7 @@ function renderRoom() {
     themeId: room.theme || 'clinic',
     isNight: state.isNight,
     editMode,
-    hoverTile: editMode ? hoveredRoomTile : null,
+    hoverTile: editMode && !wallTool ? hoveredRoomTile : null,
     selectedMoveTile: movingObj ? { gx: movingObj.gx, gy: movingObj.gy } : null,
     movingObjectId
   });
@@ -1711,22 +2137,27 @@ function loop(now) {
     }
 
     cars.forEach((c) => {
-      if (c.vertical) {
-        if (!trafficLightGreen && c.y > 6.8 * TILE && c.y < 7.8 * TILE) return;
-        c.y += c.vy * dt;
-        if (c.y > 13.6 * TILE) c.y = 2.5 * TILE;
+      if (c.axis === 'v') {
+        if (!trafficLightGreen && c.speed > 0 && c.v > 4.1 && c.v < 4.9) return;
+        c.v += c.speed * dt;
+        if (c.v > CITY_GRID.rows - 0.3) c.v = 0.3;
+        if (c.v < 0.3) c.v = CITY_GRID.rows - 0.3;
       } else {
-        if (trafficLightGreen && c.x > 12.6 * TILE && c.x < 13.4 * TILE && c.vx > 0) return;
-        c.x += c.vx * dt;
-        if (c.x > WORLD_W) c.x = -30;
-        if (c.x < -30) c.x = WORLD_W;
+        if (trafficLightGreen && c.speed > 0 && c.u > 4.1 && c.u < 4.9) return;
+        c.u += c.speed * dt;
+        if (c.u > CITY_GRID.cols - 0.3) c.u = 0.3;
+        if (c.u < 0.3) c.u = CITY_GRID.cols - 0.3;
       }
     });
 
     pedestrians.forEach((p) => {
-      if (!p.vx) return;
-      p.x += p.vx * dt;
-      if (p.x > p.maxX || p.x < p.minX) p.vx *= -1;
+      if (p.axis === 'u') {
+        p.u += p.speed * dt;
+        if (p.u > p.max || p.u < p.min) p.speed *= -1;
+      } else {
+        p.v += p.speed * dt;
+        if (p.v > p.max || p.v < p.min) p.speed *= -1;
+      }
     });
     ducks.forEach((d) => {
       d.angle += dt * 2.4;
@@ -1756,8 +2187,15 @@ function loop(now) {
         player.y += ((player.targetY - player.y) / dist) * player.speed * dt;
       }
     }
-    player.x = Math.max(TILE * 0.5, Math.min(WORLD_W - TILE * 0.5, player.x));
-    player.y = Math.max(TILE * 2.5, Math.min(13.6 * TILE, player.y));
+    // Mantém o jogador sobre a ilha isométrica
+    const pIso = screenToCityIso(player.x, player.y);
+    const cu = Math.max(0.3, Math.min(CITY_GRID.cols - 0.3, pIso.u));
+    const cv = Math.max(0.3, Math.min(CITY_GRID.rows - 0.3, pIso.v));
+    if (cu !== pIso.u || cv !== pIso.v) {
+      const clamped = cityIso(cu, cv);
+      player.x = clamped.x;
+      player.y = clamped.y;
+    }
 
     if (presenceConn && now - lastPresenceSent > 110) {
       lastPresenceSent = now;
@@ -1904,11 +2342,17 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
 
-  // Hover preview no Modo Edição do Quarto (Móveis, Mover ou Planta)
+  // Hover preview no Modo Edição do Quarto (Móveis, Mover, Planta ou Paredes)
   if (!cam.dragging && view.mode === 'room' && editMode) {
+    const room = getCurrentRoom();
+    if (isWallToolActive()) {
+      hoveredRoomTile = null;
+      hoveredRoomWall = room ? findHoveredWall(room, e.clientX, e.clientY) : null;
+      return;
+    }
+    hoveredRoomWall = null;
     const allowOutside = editorTab === 'layout';
     const hit = screenToRoomTile(e.clientX, e.clientY, allowOutside);
-    const room = getCurrentRoom();
     if (hit && room) {
       const occupied = room.objects.some((o) => o.gx === hit.gx && o.gy === hit.gy);
       hoveredRoomTile = { gx: hit.gx, gy: hit.gy, occupied, inCells: hit.inCells };
@@ -1937,6 +2381,7 @@ canvas.addEventListener('pointermove', (e) => {
 
 canvas.addEventListener('pointerleave', () => {
   hoveredRoomTile = null;
+  hoveredRoomWall = null;
 });
 
 canvas.addEventListener('pointercancel', (e) => {
@@ -1965,16 +2410,35 @@ canvas.addEventListener('pointerup', (e) => {
       openPeerModal(clickedPeer);
       return;
     }
-    for (const b of state.buildings) {
-      const lot = CITY_LOTS.find((l) => l.id === b.lotId);
-      if (!lot) continue;
-      const bx = lot.gx * TILE;
-      const by = lot.gy * TILE;
-      if (pt.x >= bx - 16 && pt.x <= bx + 102 && pt.y >= by - 58 && pt.y <= by + 84) {
+    // Verifica clique nos prédios construídos (ordenados de frente para trás para precisão)
+    const sortedBuildings = [...state.buildings]
+      .map((b) => ({ b, lot: CITY_LOTS.find((l) => l.id === b.lotId) }))
+      .filter((x) => x.lot)
+      .sort((a, b) => cityIso(b.lot.u, b.lot.v).y - cityIso(a.lot.u, a.lot.v).y);
+
+    for (const { b, lot } of sortedBuildings) {
+      const c = cityIso(lot.u, lot.v);
+      if (Math.abs(pt.x - c.x) <= 56 && pt.y >= c.y - 82 && pt.y <= c.y + 38) {
         enterBuilding(b.id);
         return;
       }
     }
+
+    // Verifica clique em um lote livre para construir diretamente naquela quadra!
+    if (sharedRole !== 'viewer') {
+      const isoClick = screenToCityIso(pt.x, pt.y);
+      const clickedFreeLot = CITY_LOTS.find(
+        (l) =>
+          !state.buildings.some((b) => b.lotId === l.id) &&
+          Math.abs(isoClick.u - l.u) <= 0.92 &&
+          Math.abs(isoClick.v - l.v) <= 0.92
+      );
+      if (clickedFreeLot) {
+        openNewBuildingModal(clickedFreeLot.id);
+        return;
+      }
+    }
+
     player.targetX = pt.x;
     player.targetY = pt.y;
   } else if (view.mode === 'reception') {
@@ -1993,13 +2457,23 @@ canvas.addEventListener('pointerup', (e) => {
     }
     openReceptionModal();
   } else if (view.mode === 'room' && canvas._roomGrid) {
+    const room = getCurrentRoom();
+    if (!room) return;
+
+    // Ferramenta de Apagar / Recolocar Parede
+    if (isWallToolActive()) {
+      const wallHit = findHoveredWall(room, e.clientX, e.clientY);
+      if (wallHit) {
+        toggleWallSegment(room, wallHit);
+        hoveredRoomWall = findHoveredWall(room, e.clientX, e.clientY);
+      }
+      return;
+    }
+
     const allowOutside = editMode && editorTab === 'layout';
     const hit = screenToRoomTile(e.clientX, e.clientY, allowOutside);
     if (!hit) return;
     const { gx, gy, inCells } = hit;
-
-    const room = getCurrentRoom();
-    if (!room) return;
 
     // Aba PLANTA: acoplar corredor, quarto pronto, +1 ladrilho ou remover ladrilho
     if (editMode && editorTab === 'layout') {
@@ -2112,8 +2586,13 @@ document.querySelectorAll('[data-quick-emote]').forEach((btn) => {
   };
 });
 
-document.getElementById('btnNewBuilding').onclick = openNewBuildingModal;
+document.getElementById('btnNewBuilding').onclick = () => openNewBuildingModal();
+document.getElementById('btnManageBuildings').onclick = openManageBuildingsModal;
 document.getElementById('btnOpenIndex').onclick = openReceptionModal;
+document.getElementById('btnEditBuilding').onclick = () => {
+  const b = getCurrentBuilding();
+  if (b) openEditBuildingModal(b);
+};
 document.getElementById('btnDecayConfig').onclick = () => {
   const b = getCurrentBuilding();
   if (b) openDecayConfigModal(b);
@@ -2184,6 +2663,23 @@ btnRotatePreset.onclick = () => {
   renderFloorplanPresets();
   updateEditorBanner();
 };
+btnShowAllWalls.onclick = () => {
+  const room = getCurrentRoom();
+  if (!room) return;
+  room.hiddenWalls = {};
+  persistState();
+  showToast('👁️ Todas as paredes restauradas!');
+};
+btnHideAllWalls.onclick = () => {
+  const room = getCurrentRoom();
+  if (!room) return;
+  room.hiddenWalls = {};
+  getExposedBackWalls(room).forEach((w) => {
+    room.hiddenWalls[w.key] = true;
+  });
+  persistState();
+  showToast('🚫 Paredes ocultadas! (você pode recolocar uma por uma com 🧱 Apagar Parede)');
+};
 btnResetViewFromLayout.onclick = () => resetInnerCam();
 
 document.querySelectorAll('.editor-tab').forEach((btn) => {
@@ -2200,6 +2696,24 @@ btnRenameRoom.onclick = () => {
   refreshEditorPanel();
   showToast(`✏️ Cômodo renomeado para "${next}"`);
 };
+
+if (btnDeleteCurrentRoom) {
+  btnDeleteCurrentRoom.onclick = () => {
+    const ap = getCurrentApartment();
+    const room = getCurrentRoom();
+    if (!ap || !room) return;
+    if (!confirm(`Excluir permanentemente o quarto "${room.name}" (${room.objects.length} objetos)?`)) return;
+    ap.rooms = ap.rooms.filter((r) => r.id !== room.id);
+    persistState();
+    setEditMode(false);
+    view.mode = 'reception';
+    view.roomId = null;
+    updateTopbar();
+    pushMyPresenceNow(true);
+    openReceptionModal();
+    showToast(`🗑️ Quarto "${room.name}" excluído.`);
+  };
+}
 
 btnRoomRonda.onclick = () => {
   const b = getCurrentBuilding();
@@ -2275,6 +2789,9 @@ function renderObjectPalette() {
     customObjectPaletteEl.appendChild(makeCatalogCard(item, true));
   });
 
+  if (builtinCatalogLabel) {
+    builtinCatalogLabel.textContent = `🏥 Catálogo Pronto (${OBJECT_CATALOG.length})`;
+  }
   objectPaletteEl.innerHTML = '';
   OBJECT_CATALOG.forEach((item) => {
     objectPaletteEl.appendChild(makeCatalogCard(item, false));
@@ -2283,23 +2800,63 @@ function renderObjectPalette() {
 
 renderObjectPalette();
 
-// ---------------- ESTÚDIO DE CRIAÇÃO / GERADOR GRATUITO DE OBJETOS ----------------
+// ---------------- ESTÚDIO DE CRIAÇÃO / RECORTADOR DE FOLHA / GERADOR GRATUITO ----------------
 function openSpriteGeneratorModal() {
-  let activeTab = 'ai'; // 'ai' | 'mnemonic' | 'upload'
+  let activeTab = 'sheet'; // 'sheet' | 'ai' | 'mnemonic' | 'upload'
   let previewDataUrl = '';
   let previewFlipped = false;
   let activeAbort = null;
 
+  // Estado do Recortador de Folha (vários objetos de uma vez, 100% offline/grátis)
+  let loadedSheetImg = null;
+  let slicedRgbaCanvas = null;
+  let slicedItems = [];
+
   const wrap = document.createElement('div');
   wrap.innerHTML = `
     <div class="gen-tabs" role="tablist">
-      <button type="button" class="gen-tab active" data-gtab="ai">✨ IA Grátis</button>
-      <button type="button" class="gen-tab" data-gtab="mnemonic">🧠 Mnemônico (0s)</button>
-      <button type="button" class="gen-tab" data-gtab="upload">🖼️ Enviar Imagem</button>
+      <button type="button" class="gen-tab active" data-gtab="sheet">✂️ Folha (Vários)</button>
+      <button type="button" class="gen-tab" data-gtab="ai">✨ IA Grátis</button>
+      <button type="button" class="gen-tab" data-gtab="mnemonic">🧠 Mnemônico</button>
+      <button type="button" class="gen-tab" data-gtab="upload">🖼️ 1 Imagem</button>
+    </div>
+
+    <!-- Aba 0: Recortar Folha com vários objetos (100% no navegador, sem IA e sem custo!) -->
+    <div id="genPaneSheet" class="card-box">
+      <small style="color:var(--muted)">Suba uma imagem com <strong>vários objetos juntos</strong> (fundo branco, cinza ou transparente). O próprio app remove o fundo e separa cada objeto automaticamente em segundos — <strong>sem precisar de IA</strong>!</small>
+      <input id="genSheetFile" type="file" accept="image/*" />
+
+      <div id="sliceToolsWrap" class="hidden" style="display:flex;flex-direction:column;gap:8px;">
+        <div class="slice-controls-grid">
+          <div>
+            <label><span>Tolerância fundo</span><strong id="sliceTolVal">24</strong></label>
+            <input id="sliceTol" type="range" min="8" max="60" value="24" style="width:100%;" />
+          </div>
+          <div>
+            <label><span>Agrupar partes</span><strong id="sliceGapVal">14px</strong></label>
+            <input id="sliceGap" type="range" min="0" max="34" value="14" style="width:100%;" />
+          </div>
+        </div>
+
+        <div class="crud-row-head">
+          <span id="sliceCountLabel" style="font-size:12px;color:var(--accent);font-weight:700;">0 objetos detectados</span>
+          <div class="crud-mini-actions">
+            <button type="button" id="btnSliceAll" class="btn-ghost btn-sm">☑️ Todos</button>
+            <button type="button" id="btnSliceNone" class="btn-ghost btn-sm">☐ Nenhum</button>
+            <button type="button" id="btnSliceMerge" class="btn-secondary btn-sm" title="Junta 2 ou mais peças marcadas em 1 único objeto">🔗 Juntar</button>
+          </div>
+        </div>
+
+        <div id="sliceGrid" class="slice-grid"></div>
+
+        <div class="row-actions" style="justify-content:flex-end;">
+          <button type="button" id="btnSaveSlicedBatch" class="btn-success" disabled>💾 Salvar Selecionados na Minha Lista</button>
+        </div>
+      </div>
     </div>
 
     <!-- Aba 1: Gerador IA 100% Gratuito (AI Horde) -->
-    <div id="genPaneAi" class="card-box">
+    <div id="genPaneAi" class="card-box hidden">
       <small style="color:var(--muted)">Descreva qualquer objeto ou imagem mnemônica! O app aplica automaticamente o <strong>estilo ilustrado 2.5D dos quartos</strong> e recorta o fundo branco — <strong>100% grátis</strong>.</small>
       <div class="field">
         <label>O que você quer desenhar?</label>
@@ -2346,14 +2903,14 @@ function openSpriteGeneratorModal() {
       </div>
     </div>
 
-    <!-- Aba 3: Enviar imagem pronta do dispositivo -->
+    <!-- Aba 3: Enviar 1 imagem pronta do dispositivo -->
     <div id="genPaneUpload" class="card-box hidden">
-      <small style="color:var(--muted)">Envie qualquer desenho ou imagem com fundo branco/transparente do celular ou PC. O app remove o fundo branco automaticamente!</small>
+      <small style="color:var(--muted)">Envie 1 desenho ou imagem com fundo branco/transparente do celular ou PC. O app remove o fundo automaticamente!</small>
       <input id="genUploadFile" type="file" accept="image/*" />
     </div>
 
-    <!-- Prévia compartilhada com teste de Esquerda / Direita + Salvar na Lista -->
-    <div class="card-box">
+    <!-- Prévia compartilhada (abas IA / Mnemônico / 1 Imagem) -->
+    <div id="singlePreviewCard" class="card-box hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
         <strong style="font-size:13px;">Prévia do Objeto (fundo transparente)</strong>
         <button type="button" id="btnPreviewFlip" class="btn-ghost btn-sm">↔️ Testar Lado (↙️ Esq)</button>
@@ -2371,11 +2928,13 @@ function openSpriteGeneratorModal() {
     </div>
   `;
 
-  openModal('✨ Criador de Objetos 2.5D (Grátis)', wrap);
+  openModal('✂️ Importar Folha & Criador de Objetos', wrap);
 
+  const paneSheet = wrap.querySelector('#genPaneSheet');
   const paneAi = wrap.querySelector('#genPaneAi');
   const paneMnem = wrap.querySelector('#genPaneMnemonic');
   const paneUp = wrap.querySelector('#genPaneUpload');
+  const singlePreviewCard = wrap.querySelector('#singlePreviewCard');
   const previewStage = wrap.querySelector('#genPreviewStage');
   const btnPreviewFlip = wrap.querySelector('#btnPreviewFlip');
   const inpSaveName = wrap.querySelector('#genSaveName');
@@ -2385,7 +2944,163 @@ function openSpriteGeneratorModal() {
   const btnCancelAi = wrap.querySelector('#btnCancelAiGen');
   const inpAiPrompt = wrap.querySelector('#genAiPrompt');
 
+  // Controles do Recortador de Folha
+  const sliceToolsWrap = wrap.querySelector('#sliceToolsWrap');
+  const sliceTol = wrap.querySelector('#sliceTol');
+  const sliceTolVal = wrap.querySelector('#sliceTolVal');
+  const sliceGap = wrap.querySelector('#sliceGap');
+  const sliceGapVal = wrap.querySelector('#sliceGapVal');
+  const sliceCountLabel = wrap.querySelector('#sliceCountLabel');
+  const sliceGrid = wrap.querySelector('#sliceGrid');
+  const btnSaveSlicedBatch = wrap.querySelector('#btnSaveSlicedBatch');
+
   let selectedMnemEmoji = '🌸';
+
+  function renderSliceGrid() {
+    const selectedCount = slicedItems.filter((x) => x.selected).length;
+    sliceCountLabel.textContent = `${slicedItems.length} objeto${slicedItems.length === 1 ? '' : 's'} detectado${slicedItems.length === 1 ? '' : 's'} (${selectedCount} marcados)`;
+    btnSaveSlicedBatch.disabled = selectedCount === 0;
+    btnSaveSlicedBatch.textContent =
+      selectedCount > 0
+        ? `💾 Salvar ${selectedCount} Objeto${selectedCount === 1 ? '' : 's'} na Minha Lista`
+        : '💾 Marque ao menos 1 objeto';
+
+    sliceGrid.innerHTML = '';
+    if (slicedItems.length === 0) {
+      sliceGrid.innerHTML = '<small style="color:var(--muted);grid-column:1/-1;">Nenhum objeto separado. Tente ajustar a tolerância do fundo acima.</small>';
+      return;
+    }
+
+    slicedItems.forEach((item) => {
+      const card = document.createElement('div');
+      card.className = `slice-card ${item.selected ? 'selected' : ''}`;
+      card.innerHTML = `
+        <input type="checkbox" class="slice-check" ${item.selected ? 'checked' : ''} />
+        <div class="slice-thumb" title="Clique para marcar / desmarcar">
+          <img src="${item.dataUrl}" alt="${escapeHtml(item.name)}" />
+        </div>
+        <input type="text" class="slice-name-inp" maxlength="22" value="${escapeHtml(item.name)}" placeholder="Nome..." />
+      `;
+      const chk = card.querySelector('.slice-check');
+      const thumb = card.querySelector('.slice-thumb');
+      const nameInp = card.querySelector('.slice-name-inp');
+
+      const toggleSel = () => {
+        item.selected = !item.selected;
+        chk.checked = item.selected;
+        card.classList.toggle('selected', item.selected);
+        const cnt = slicedItems.filter((x) => x.selected).length;
+        sliceCountLabel.textContent = `${slicedItems.length} objeto${slicedItems.length === 1 ? '' : 's'} detectado${slicedItems.length === 1 ? '' : 's'} (${cnt} marcados)`;
+        btnSaveSlicedBatch.disabled = cnt === 0;
+        btnSaveSlicedBatch.textContent =
+          cnt > 0
+            ? `💾 Salvar ${cnt} Objeto${cnt === 1 ? '' : 's'} na Minha Lista`
+            : '💾 Marque ao menos 1 objeto';
+      };
+
+      chk.onchange = toggleSel;
+      thumb.onclick = toggleSel;
+      nameInp.oninput = () => {
+        item.name = nameInp.value;
+      };
+      sliceGrid.appendChild(card);
+    });
+  }
+
+  function runSheetSlicing() {
+    if (!loadedSheetImg) return;
+    const tol = parseInt(sliceTol.value, 10) || 24;
+    const gap = parseInt(sliceGap.value, 10) || 14;
+    sliceTolVal.textContent = String(tol);
+    sliceGapVal.textContent = `${gap}px`;
+    const result = sliceSpriteSheet(loadedSheetImg, { tolerance: tol, mergeGap: gap, minSize: 22 });
+    slicedRgbaCanvas = result.rgbaCanvas;
+    slicedItems = result.items;
+    sliceToolsWrap.classList.remove('hidden');
+    renderSliceGrid();
+  }
+
+  wrap.querySelector('#genSheetFile').onchange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        loadedSheetImg = img;
+        runSheetSlicing();
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  sliceTol.oninput = () => { sliceTolVal.textContent = sliceTol.value; };
+  sliceTol.onchange = runSheetSlicing;
+  sliceGap.oninput = () => { sliceGapVal.textContent = `${sliceGap.value}px`; };
+  sliceGap.onchange = runSheetSlicing;
+
+  wrap.querySelector('#btnSliceAll').onclick = () => {
+    slicedItems.forEach((x) => { x.selected = true; });
+    renderSliceGrid();
+  };
+  wrap.querySelector('#btnSliceNone').onclick = () => {
+    slicedItems.forEach((x) => { x.selected = false; });
+    renderSliceGrid();
+  };
+  wrap.querySelector('#btnSliceMerge').onclick = () => {
+    const picked = slicedItems.filter((x) => x.selected);
+    if (picked.length < 2) {
+      return showToast('Marque 2 ou mais peças para juntar em 1 único objeto!');
+    }
+    const merged = mergeSlicedBoxes(slicedRgbaCanvas, picked.map((p) => p.box));
+    if (!merged) return;
+    const firstIdx = slicedItems.findIndex((x) => x.selected);
+    const mergedItem = {
+      id: `merged-${Date.now()}`,
+      box: merged.box,
+      dataUrl: merged.dataUrl,
+      width: merged.width,
+      height: merged.height,
+      selected: true,
+      name: picked[0].name || 'Objeto Unido'
+    };
+    slicedItems = slicedItems.filter((x) => !x.selected);
+    slicedItems.splice(Math.max(0, firstIdx), 0, mergedItem);
+    renderSliceGrid();
+    showToast(`🔗 ${picked.length} peças unidas em 1 objeto!`);
+  };
+
+  btnSaveSlicedBatch.onclick = () => {
+    const chosen = slicedItems.filter((x) => x.selected);
+    if (chosen.length === 0) return;
+    state.customCatalog = Array.isArray(state.customCatalog) ? state.customCatalog : [];
+    const maxCustom = 160;
+    const roomLeft = maxCustom - state.customCatalog.length;
+    if (roomLeft <= 0) {
+      return alert(`Limite de ${maxCustom} objetos personalizados atingido. Remova alguns antigos primeiro.`);
+    }
+    const toAdd = chosen.slice(0, roomLeft);
+    const created = toAdd.map((it, idx) => {
+      const label = (it.name || `Objeto ${idx + 1}`).trim() || `Objeto ${idx + 1}`;
+      return {
+        id: uid('cust'),
+        name: label,
+        shortName: label.slice(0, 14),
+        icon: '✂️',
+        thumb: it.dataUrl,
+        preprocessed: true
+      };
+    });
+    state.customCatalog = [...created, ...state.customCatalog];
+    registerCustomSprites(state.customCatalog);
+    selectedPaletteType = created[0].id;
+    persistState();
+    renderObjectPalette();
+    updateEditorBanner();
+    closeModal();
+    showToast(`✂️ ${created.length} objeto${created.length === 1 ? '' : 's'} recortados e salvos na sua lista!`);
+  };
 
   function updatePreview(dataUrl, suggestedName = '') {
     previewDataUrl = dataUrl;
@@ -2413,9 +3128,11 @@ function openSpriteGeneratorModal() {
     tabBtn.onclick = () => {
       activeTab = tabBtn.dataset.gtab;
       wrap.querySelectorAll('.gen-tab').forEach((b) => b.classList.toggle('active', b === tabBtn));
+      paneSheet.classList.toggle('hidden', activeTab !== 'sheet');
       paneAi.classList.toggle('hidden', activeTab !== 'ai');
       paneMnem.classList.toggle('hidden', activeTab !== 'mnemonic');
       paneUp.classList.toggle('hidden', activeTab !== 'upload');
+      singlePreviewCard.classList.toggle('hidden', activeTab === 'sheet');
       if (activeTab === 'mnemonic') {
         renderMnemonicNow();
       }
@@ -2461,7 +3178,7 @@ function openSpriteGeneratorModal() {
       if (err?.name === 'AbortError') {
         aiStatus.textContent = 'Geração cancelada.';
       } else {
-        aiStatus.textContent = `⚠️ ${err?.message || 'Falha no servidor gratuito.'} Dica: tente de novo ou use a aba "🧠 Mnemônico (0s)".`;
+        aiStatus.textContent = `⚠️ ${err?.message || 'Falha no servidor gratuito.'} Dica: tente de novo ou use a aba "🧠 Mnemônico".`;
       }
     } finally {
       btnRunAi.disabled = false;
@@ -2489,7 +3206,7 @@ function openSpriteGeneratorModal() {
     };
   });
 
-  // Eventos da aba Enviar Imagem
+  // Eventos da aba Enviar 1 Imagem
   wrap.querySelector('#genUploadFile').onchange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2512,8 +3229,8 @@ function openSpriteGeneratorModal() {
     if (!previewDataUrl) return;
     const label = inpSaveName.value.trim() || 'Meu Objeto';
     state.customCatalog = Array.isArray(state.customCatalog) ? state.customCatalog : [];
-    if (state.customCatalog.length >= 60) {
-      return alert('Limite de 60 objetos personalizados atingido. Remova algum antigo para guardar novos.');
+    if (state.customCatalog.length >= 160) {
+      return alert('Limite de 160 objetos personalizados atingido. Remova algum antigo para guardar novos.');
     }
     const newItem = {
       id: uid('cust'),

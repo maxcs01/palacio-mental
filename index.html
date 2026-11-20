@@ -3,9 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#0f172a" />
+  <meta name="theme-color" content="#182235" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="The Reds" />
+  <link rel="icon" type="image/png" href="/assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="/assets/icon-180.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <title>Cidade Palácio Mental</title>
+  <title>The Reds — Palácio Mental</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -13,21 +18,22 @@
     <!-- Barra superior fixa -->
     <header class="topbar">
       <div class="brand">
-        <span class="badge-pixel">🏥</span>
-        <span id="breadcrumb">Cidade Médica</span>
+        <img src="/assets/logo-reds.png" class="brand-logo" alt="The Reds" />
+        <span id="breadcrumb">The Reds</span>
       </div>
 
       <div class="search-wrap">
-        <input id="searchInput" type="search" placeholder="Busca rápida (ex: Pneumonia, Raio-X, AVC)..." autocomplete="off" />
+        <input id="searchInput" type="search" placeholder="Busca rápida (ex: Tuberculose, Pneumonia, AVC)..." autocomplete="off" />
         <div id="searchResults" class="search-results hidden"></div>
       </div>
 
       <div class="topbar-actions">
+        <button id="btnInstallApp" class="btn-install" title="Instalar The Reds no celular ou PC">📲 Instalar</button>
         <button id="btnFriends" class="btn-secondary" title="Compartilhar mundo e ver colegas online">👥 Amigos</button>
         <button id="btnAccount" class="btn-secondary" title="Entrar / Sincronizar na nuvem">☁️ Nuvem</button>
         <button id="btnDayNight" class="btn-icon" title="Alternar Dia / Noite">☀️</button>
         <button id="btnMusic" class="btn-icon" title="Música ambiente">🎵</button>
-        <button id="btnRonda" class="btn-primary hidden">⚡ Ronda Rápida</button>
+        <button id="btnRonda" class="btn-primary hidden">⚡ Ronda</button>
         <button id="btnBack" class="btn-secondary hidden">← Voltar</button>
       </div>
     </header>
@@ -60,11 +66,12 @@
           <button id="btnZoomIn" class="btn-hud" title="Zoom +">＋</button>
           <button id="btnZoomOut" class="btn-hud" title="Zoom -">－</button>
           <button id="btnNewBuilding" class="btn-primary">+ Novo Prédio</button>
+          <button id="btnManageBuildings" class="btn-secondary" title="Criar, editar ou excluir prédios">🏘️ Prédios</button>
           <span class="hud-sep"></span>
           <span id="cityStatusPill" class="city-status-pill">🏛️ 0 marcos • 👥 Cidade viva</span>
         </div>
         <div class="hud-hint" id="cityHint">
-          WASD/Setas ou toque para andar • Clique num prédio para entrar • Scroll/pinça para Zoom
+          Clique num prédio para entrar • Clique num lote livre para construir • Arraste / pinça para navegar
         </div>
       </div>
 
@@ -72,13 +79,14 @@
       <div id="receptionHud" class="hud-bottom hidden">
         <div class="hud-group">
           <button id="btnOpenIndex" class="btn-primary">📋 Índice dos Andares</button>
-          <button id="btnDecayConfig" class="btn-secondary">⚙️ Prazo de Desgaste</button>
+          <button id="btnEditBuilding" class="btn-secondary">✏️ Editar Prédio</button>
+          <button id="btnDecayConfig" class="btn-secondary">⚙️ Prazo</button>
           <span class="hud-sep"></span>
           <button class="btn-hud inner-zoom-out" title="Afastar">－</button>
           <button class="btn-hud inner-zoom-reset" title="Centralizar">⌖</button>
           <button class="btn-hud inner-zoom-in" title="Aproximar">＋</button>
         </div>
-        <div class="hud-hint">Clique no Quadro na parede para abrir os andares e apartamentos</div>
+        <div class="hud-hint">Clique no Quadro na parede para gerenciar andares, apartamentos e quartos</div>
       </div>
 
       <!-- Barra de Estudo dentro do Cômodo (quando Modo Edição está OFF) -->
@@ -124,10 +132,10 @@
         </div>
 
         <div class="editor-body">
-          <!-- Aba 1: Catálogo visual com miniaturas + direção + gerador gratuito -->
+          <!-- Aba 1: Catálogo visual com miniaturas + direção + gerador/recortador gratuito -->
           <div id="tabAdd" class="editor-pane">
             <button id="btnOpenSpriteStudio" class="btn-studio-create" type="button">
-              ✨ Criar / Gerar Objeto (Grátis)
+              ✂️ Importar Folha / Criar Objetos (Grátis)
             </button>
 
             <div class="facing-bar">
@@ -145,7 +153,7 @@
               <div id="customObjectPalette" class="catalog-grid"></div>
             </div>
 
-            <div class="editor-section-label">🏥 Catálogo Pronto (18)</div>
+            <div id="builtinCatalogLabel" class="editor-section-label">🏥 Catálogo Pronto (34)</div>
             <div id="objectPalette" class="catalog-grid"></div>
           </div>
 
@@ -159,7 +167,7 @@
             <button id="btnCancelMove" class="btn-secondary hidden" style="width:100%;margin-top:8px;">Cancelar seleção</button>
           </div>
 
-          <!-- Aba 3: Planta Modular (expandir linhas/colunas, acoplar corredores e cômodos prontos) -->
+          <!-- Aba 3: Planta Modular (expandir, acoplar corredores/cômodos e apagar/restaurar paredes) -->
           <div id="tabLayout" class="editor-pane hidden">
             <div class="editor-section-label">Expandir Rapidamente</div>
             <div class="layout-quick-row">
@@ -168,9 +176,14 @@
               <button id="btnRotatePreset" class="btn-ghost btn-sm" title="Girar formato (horizontal / vertical)">🔄 Girar</button>
             </div>
 
-            <div class="editor-section-label" style="margin-top:12px;">Acoplar Corredor ou Cômodo Pronto</div>
-            <p class="editor-tip" id="layoutPresetTip">Escolha um formato abaixo e clique no piso ou ao lado de um corredor/quarto para encaixar:</p>
+            <div class="editor-section-label" style="margin-top:12px;">Corredores, Cômodos & Paredes</div>
+            <p class="editor-tip" id="layoutPresetTip">Escolha um formato abaixo (ou 🧱 Apagar Parede) e clique na planta:</p>
             <div id="floorplanPresetGrid" class="preset-grid"></div>
+
+            <div class="wall-bulk-row">
+              <button id="btnShowAllWalls" class="btn-ghost btn-sm" type="button">👁️ Todas Paredes</button>
+              <button id="btnHideAllWalls" class="btn-ghost btn-sm" type="button">🚫 Sem Paredes</button>
+            </div>
 
             <div class="layout-footer-row">
               <span id="layoutAreaInfo" class="editor-subtitle">7×6 (42 ladrilhos)</span>
@@ -178,7 +191,7 @@
             </div>
           </div>
 
-          <!-- Aba 4: Tema visual do quarto + Lista de objetos -->
+          <!-- Aba 4: Tema visual do quarto + CRUD do Quarto + Lista de objetos -->
           <div id="tabStyle" class="editor-pane hidden">
             <div class="editor-section-label">Textura & Estilo do Quarto</div>
             <div id="themeGrid" class="theme-grid"></div>
@@ -191,6 +204,10 @@
 
             <div class="editor-section-label" style="margin-top:14px;">Objetos neste Quarto</div>
             <div id="roomObjectsList" class="room-objects-list"></div>
+
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-soft);">
+              <button id="btnDeleteCurrentRoom" class="btn-danger btn-sm" style="width:100%;">🗑️ Excluir este Quarto</button>
+            </div>
           </div>
         </div>
       </aside>
