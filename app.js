@@ -113,6 +113,86 @@ let myAvatar = JSON.parse(localStorage.getItem('palacio_avatar_v1') || '{"name":
 let remotePeers = [];
 let presenceConn = null;
 let lastPresenceSent = 0;
+let myEmote = '';
+let myEmoteTimer = null;
+
+function triggerEmote(text) {
+  myEmote = text;
+  if (myEmoteTimer) clearTimeout(myEmoteTimer);
+  if (presenceConn) {
+    presenceConn.updatePosition({ emote: myEmote });
+  }
+  myEmoteTimer = setTimeout(() => {
+    myEmote = '';
+    if (presenceConn) presenceConn.updatePosition({ emote: '' });
+  }, 4000);
+}
+
+function formatPeerLocation(peer) {
+  if (!peer) return 'Na cidade';
+  if (peer.mode === 'city' || !peer.mode) return 'Na cidade';
+  const b = state.buildings.find((x) => x.id === peer.buildingId);
+  if (peer.mode === 'reception') return b ? `Recepção • ${b.name}` : 'Na recepção';
+  if (peer.mode === 'room' && b) {
+    for (const f of b.floors) {
+      for (const ap of f.apartments) {
+        const rm = ap.rooms.find((r) => r.id === peer.roomId);
+        if (rm) return `${b.name} → ${ap.name} → ${rm.name}`;
+      }
+    }
+    return `Em ${b.name}`;
+  }
+  return 'Estudando';
+}
+
+function goToPeer(peer) {
+  if (!peer) return;
+  if (peer.mode === 'reception' && peer.buildingId) {
+    enterBuilding(peer.buildingId);
+  } else if (peer.mode === 'room' && peer.buildingId && peer.roomId) {
+    const b = state.buildings.find((x) => x.id === peer.buildingId);
+    if (b) {
+      for (const f of b.floors) {
+        for (const ap of f.apartments) {
+          const rm = ap.rooms.find((r) => r.id === peer.roomId);
+          if (rm) {
+            enterRoom(b.id, f.id, ap.id, rm.id);
+            roomPlayer.gx = typeof peer.rgx === 'number' ? Math.max(0.5, peer.rgx - 0.6) : 3.5;
+            roomPlayer.gy = typeof peer.rgy === 'number' ? peer.rgy : 4.5;
+            return;
+          }
+        }
+      }
+    }
+  } else {
+    goHome();
+    if (typeof peer.x === 'number' && typeof peer.y === 'number') {
+      player.targetX = peer.x + 22;
+      player.targetY = peer.y;
+    }
+  }
+}
+
+function openPeerModal(peer) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+    <div class="card-box">
+      <p><strong>${peer.name || 'Amigo'}</strong></p>
+      <p style="font-size:13px;color:var(--muted)">📍 ${formatPeerLocation(peer)}</p>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+        <button class="btn-primary" id="btnPeerGo">📍 Ir até ${peer.name || 'amigo'}</button>
+        <button class="btn-ghost" id="btnPeerWave">👋 Acenar</button>
+        <button class="btn-ghost" id="btnPeerIdea">💡 Entendi!</button>
+        <button class="btn-ghost" id="btnPeerCome">📣 Vem pra cá!</button>
+      </div>
+    </div>
+  `;
+  openModal('👤 Colega de Estudo', wrap);
+  document.getElementById('btnPeerGo').onclick = () => { closeModal(); goToPeer(peer); };
+  document.getElementById('btnPeerWave').onclick = () => { triggerEmote('👋'); closeModal(); };
+  document.getElementById('btnPeerIdea').onclick = () => { triggerEmote('💡'); closeModal(); };
+  document.getElementById('btnPeerCome').onclick = () => { triggerEmote('📣 Vem cá!'); closeModal(); };
+}
 
 // Elementos de UI
 const breadcrumbEl = document.getElementById('breadcrumb');
@@ -842,12 +922,12 @@ function renderCity() {
   remotePeers.forEach((peer) => {
     if (peer.id === myPeerId) return;
     if (peer.mode === 'city') {
-      drawAvatar(ctx, peer.x || 12 * TILE, peer.y || 9.5 * TILE, peer.color || '#f43f5e', peer.name || 'Amigo');
+      drawAvatar(ctx, peer.x || 12 * TILE, peer.y || 9.5 * TILE, peer.color || '#f43f5e', peer.name || 'Amigo', peer.emote || '');
     }
   });
 
   // Avatar do jogador
-  drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name);
+  drawAvatar(ctx, player.x, player.y, myAvatar.color, myAvatar.name, myEmote);
 
   ctx.restore();
 }
@@ -969,7 +1049,8 @@ function renderRoom() {
     gx: roomPlayer.gx,
     gy: roomPlayer.gy,
     color: myAvatar.color,
-    name: myAvatar.name
+    name: myAvatar.name,
+    emote: myEmote
   });
 
   remotePeers.forEach((peer) => {
@@ -982,7 +1063,8 @@ function renderRoom() {
         gx: pgx,
         gy: pgy,
         color: peer.color || '#f43f5e',
-        name: peer.name || 'Amigo'
+        name: peer.name || 'Amigo',
+        emote: peer.emote || ''
       });
     }
   });
@@ -993,7 +1075,7 @@ function renderRoom() {
     if (item.kind === 'object') {
       drawRoomObject(ctx, item.obj.type, pt.x, pt.y, tileW, editMode);
     } else {
-      drawAvatar(ctx, pt.x, pt.y, item.color, item.name);
+      drawAvatar(ctx, pt.x, pt.y, item.color, item.name, item.emote || '');
     }
   });
 
@@ -1221,6 +1303,14 @@ canvas.addEventListener('pointerup', (e) => {
 
   if (view.mode === 'city') {
     const pt = screenToWorld(e.clientX, e.clientY);
+    // Verifica clique em algum amigo conectado na cidade
+    const clickedPeer = remotePeers.find(
+      (p) => p.id !== myPeerId && p.mode === 'city' && Math.hypot((p.x || 0) - pt.x, (p.y || 0) - pt.y) < 20
+    );
+    if (clickedPeer) {
+      openPeerModal(clickedPeer);
+      return;
+    }
     // Verifica clique em algum prédio
     for (const b of state.buildings) {
       const lot = CITY_LOTS.find((l) => l.id === b.lotId);
@@ -1262,6 +1352,17 @@ canvas.addEventListener('pointerup', (e) => {
 
     const room = getCurrentRoom();
     if (!room) return;
+    // Verifica clique em algum amigo no mesmo quarto
+    const clickedRoomPeer = remotePeers.find((p) => {
+      if (p.id === myPeerId || p.mode !== 'room' || p.roomId !== room.id) return false;
+      const pgx = typeof p.rgx === 'number' ? p.rgx : 3.5;
+      const pgy = typeof p.rgy === 'number' ? p.rgy : 4.5;
+      return Math.hypot(pgx - (gx + 0.5), pgy - (gy + 0.5)) < 0.85;
+    });
+    if (clickedRoomPeer) {
+      openPeerModal(clickedRoomPeer);
+      return;
+    }
     const existing = room.objects.find((o) => o.gx === gx && o.gy === gy);
     if (existing) {
       openObjectModal(existing, room);
@@ -1422,6 +1523,9 @@ let cloudStatus = 'offline';
 
 function persistState() {
   saveState(state);
+  if (presenceConn && sharedRole !== 'viewer') {
+    presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
+  }
   if (currentUser && sharedRole !== 'viewer') {
     const targetOwnerId = sharedWorldOwnerId || currentUser.id;
     cloudStatus = 'syncing';
@@ -1456,8 +1560,9 @@ function updateAccountButton() {
 async function initCloudSession() {
   try {
     currentUser = await getSessionUser();
+    const targetOwnerId = sharedWorldOwnerId || currentUser?.id;
+
     if (currentUser) {
-      const targetOwnerId = sharedWorldOwnerId || currentUser.id;
       const remote = await loadCloudWorld(targetOwnerId);
       if (remote && remote.data) {
         state = remote.data;
@@ -1466,7 +1571,9 @@ async function initCloudSession() {
         await saveCloudWorld(currentUser.id, state);
       }
       cloudStatus = 'synced';
+    }
 
+    if (targetOwnerId) {
       if (presenceConn) presenceConn.leave();
       presenceConn = connectWorldPresence(
         targetOwnerId,
@@ -1477,13 +1584,31 @@ async function initCloudSession() {
           x: Math.round(player.x),
           y: Math.round(player.y),
           mode: view.mode,
-          buildingId: view.buildingId
+          buildingId: view.buildingId,
+          roomId: view.roomId,
+          emote: myEmote
         },
         (peers) => {
           remotePeers = peers;
           btnFriends.textContent = `👥 Amigos (${peers.length}/10)`;
+        },
+        (event, payload) => {
+          if (event === 'world_sync' && payload?.state && payload.senderId !== myPeerId) {
+            state = payload.state;
+            saveState(state);
+            updateTopbar();
+          } else if (event === 'world_request' && !sharedWorldOwnerId && currentUser) {
+            presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
+          }
         }
       );
+
+      // Se entrou por link compartilhado sem login, pede um snapshot ao vivo do dono se estiver online
+      if (sharedWorldOwnerId && !currentUser) {
+        setTimeout(() => {
+          if (presenceConn) presenceConn.broadcast('world_request', { requesterId: myPeerId });
+        }, 900);
+      }
     }
   } catch (err) {
     console.warn('Nuvem indisponível ou tabela não criada:', err);
@@ -1499,37 +1624,100 @@ function openFriendsModal() {
   const base = `${window.location.origin}${window.location.pathname}`;
   const viewerLink = worldId ? `${base}?world=${worldId}&role=viewer` : '';
   const editorLink = worldId ? `${base}?world=${worldId}&role=editor` : '';
+  const others = remotePeers.filter((p) => p.id !== myPeerId);
 
   wrap.innerHTML = `
     <div class="card-box">
-      <strong>Seu Avatar</strong>
+      <strong>Seu Avatar & Aceno Rápido</strong>
       <div style="display:flex;gap:8px;align-items:center;">
         <div class="field" style="flex:2;"><label>Nome</label><input id="avName" value="${myAvatar.name}" maxlength="12" /></div>
         <div class="field" style="flex:1;"><label>Cor</label><input id="avColor" type="color" value="${myAvatar.color}" style="height:36px;" /></div>
       </div>
-      <button id="btnSaveAvatar" class="btn-primary">Salvar Avatar</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+        <button id="btnSaveAvatar" class="btn-primary">Salvar Avatar</button>
+        <button class="btn-ghost" data-emote="👋">👋 Acenar</button>
+        <button class="btn-ghost" data-emote="💡">💡 Entendi!</button>
+        <button class="btn-ghost" data-emote="📣 Vem cá!">📣 Vem cá!</button>
+      </div>
     </div>
 
     <div class="card-box">
-      <strong>Estudar Juntos (até 10 pessoas • sem chat)</strong>
+      <strong>Online Agora (${remotePeers.length || 1}/10)</strong>
+      <div id="peersList" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+        ${
+          others.length === 0
+            ? '<p style="font-size:12px;color:var(--muted)">Nenhum outro colega conectado neste momento. Envie o link abaixo para entrarem juntos!</p>'
+            : others
+                .map(
+                  (p) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;background:rgba(15,23,42,0.4);border-radius:8px;">
+            <div>
+              <strong>${p.name || 'Amigo'}</strong>
+              <div style="font-size:11px;color:var(--muted)">📍 ${formatPeerLocation(p)}</div>
+            </div>
+            <button class="btn-primary" data-go-peer="${p.id}" style="padding:4px 10px;font-size:12px;">Ir até lá</button>
+          </div>`
+                )
+                .join('')
+        }
+      </div>
+    </div>
+
+    <div class="card-box">
+      <strong>Convites (até 10 pessoas • sem chat)</strong>
       ${
-        !currentUser
+        !worldId
           ? '<p style="color:var(--warn);font-size:13px;">Entre na sua conta em <strong>☁️ Entrar</strong> primeiro para gerar links do seu mundo.</p>'
           : `
-        <p style="font-size:12px;color:var(--muted)">Pessoas conectadas agora: <strong>${remotePeers.length || 1}/10</strong></p>
         <div class="field">
           <label>Link de Visitante (só assiste e revisa)</label>
-          <input readonly value="${viewerLink}" onclick="this.select()" />
+          <div style="display:flex;gap:6px;">
+            <input id="inpViewerLink" readonly value="${viewerLink}" onclick="this.select()" />
+            <button class="btn-ghost" id="btnCopyViewer">Copiar</button>
+          </div>
         </div>
         <div class="field">
           <label>Link de Editor (pode editar os quartos junto)</label>
-          <input readonly value="${editorLink}" onclick="this.select()" />
+          <div style="display:flex;gap:6px;">
+            <input id="inpEditorLink" readonly value="${editorLink}" onclick="this.select()" />
+            <button class="btn-ghost" id="btnCopyEditor">Copiar</button>
+          </div>
         </div>
       `
       }
     </div>
   `;
   openModal('👥 Mundo Compartilhado', wrap);
+
+  wrap.querySelectorAll('[data-emote]').forEach((btn) => {
+    btn.onclick = () => {
+      triggerEmote(btn.dataset.emote);
+      closeModal();
+    };
+  });
+
+  wrap.querySelectorAll('[data-go-peer]').forEach((btn) => {
+    btn.onclick = () => {
+      const peer = others.find((p) => p.id === btn.dataset.goPeer);
+      closeModal();
+      if (peer) goToPeer(peer);
+    };
+  });
+
+  const btnCopyViewer = document.getElementById('btnCopyViewer');
+  if (btnCopyViewer) {
+    btnCopyViewer.onclick = () => {
+      navigator.clipboard?.writeText(viewerLink);
+      btnCopyViewer.textContent = 'Copiado!';
+    };
+  }
+  const btnCopyEditor = document.getElementById('btnCopyEditor');
+  if (btnCopyEditor) {
+    btnCopyEditor.onclick = () => {
+      navigator.clipboard?.writeText(editorLink);
+      btnCopyEditor.textContent = 'Copiado!';
+    };
+  }
 
   document.getElementById('btnSaveAvatar').onclick = () => {
     myAvatar = {

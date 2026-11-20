@@ -47,11 +47,15 @@ export async function saveCloudWorld(ownerId, worldData) {
   if (error) throw error;
 }
 
-// Multiplayer estilo Habbo (até 10 pessoas, sem chat) via Supabase Realtime Presence
-export function connectWorldPresence(worldOwnerId, myProfile, onPeersUpdate) {
+// Multiplayer estilo Habbo (até 10 pessoas, sem chat) via Supabase Realtime Presence + Broadcast
+export function connectWorldPresence(worldOwnerId, myProfile, onPeersUpdate, onBroadcast) {
   const channel = supabase.channel(`world:${worldOwnerId}`, {
     config: { presence: { key: myProfile.id } }
   });
+
+  let lastTracked = { ...myProfile };
+  let lastSerialized = JSON.stringify(lastTracked);
+  let subscribed = false;
 
   channel.on('presence', { event: 'sync' }, () => {
     const raw = channel.presenceState();
@@ -63,15 +67,36 @@ export function connectWorldPresence(worldOwnerId, myProfile, onPeersUpdate) {
     onPeersUpdate(peers.slice(0, 10));
   });
 
+  if (onBroadcast) {
+    channel.on('broadcast', { event: 'world_sync' }, ({ payload }) => {
+      onBroadcast('world_sync', payload);
+    });
+    channel.on('broadcast', { event: 'world_request' }, ({ payload }) => {
+      onBroadcast('world_request', payload);
+    });
+  }
+
   channel.subscribe(async (status) => {
     if (status === 'SUBSCRIBED') {
-      await channel.track(myProfile);
+      subscribed = true;
+      await channel.track(lastTracked);
     }
   });
 
   return {
     updatePosition(pos) {
-      channel.track({ ...myProfile, ...pos }).catch(() => {});
+      const next = { ...lastTracked, ...pos };
+      const serialized = JSON.stringify(next);
+      if (serialized === lastSerialized) return;
+      lastTracked = next;
+      lastSerialized = serialized;
+      if (subscribed) {
+        channel.track(lastTracked).catch(() => {});
+      }
+    },
+    broadcast(event, payload) {
+      if (!subscribed) return;
+      channel.send({ type: 'broadcast', event, payload }).catch(() => {});
     },
     leave() {
       supabase.removeChannel(channel);

@@ -222,7 +222,7 @@ export function drawTree(ctx, x, y, wilted) {
   ctx.restore();
 }
 
-export function drawAvatar(ctx, x, y, shirtColor = '#38bdf8', label = 'Você') {
+export function drawAvatar(ctx, x, y, shirtColor = '#38bdf8', label = 'Você', emote = '') {
   ctx.save();
   ctx.strokeStyle = '#1e293b';
   ctx.lineWidth = 1.5;
@@ -257,6 +257,20 @@ export function drawAvatar(ctx, x, y, shirtColor = '#38bdf8', label = 'Você') {
     ctx.font = 'bold 9px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(label, x, y - 19);
+  }
+  if (emote) {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1.4;
+    const ew = Math.max(22, emote.length * 7 + 10);
+    ctx.beginPath();
+    ctx.roundRect(x - ew / 2, y - 47, ew, 16, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 10px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(emote, x, y - 35);
   }
   ctx.restore();
 }
