@@ -780,24 +780,293 @@ export function loadState() {
     if (!Array.isArray(parsed.customCatalog)) parsed.customCatalog = [];
     migrateSavedBuildings(parsed);
     syncMayorMilestones(parsed);
+    ensureDailyGoal(parsed);
     return parsed;
   } catch {
     return createInitialState();
   }
 }
 
+/**
+ * Salva estado no localStorage de forma segura:
+ * se o tamanho total passar de 2.4 MB (por muitas folhas recortadas),
+ * remove apenas as miniaturas pesadas da cópia do localStorage porque o IndexedDB (storageVault.js) já guarda tudo!
+ */
 export function saveState(state) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    const fullJson = JSON.stringify(state);
+    if (fullJson.length <= 2400000) {
+      localStorage.setItem(STORAGE_KEY, fullJson);
+      return;
+    }
+    const slimState = {
+      ...state,
+      customCatalog: (state.customCatalog || []).map((c) => ({
+        ...c,
+        thumb: c.thumb && c.thumb.length > 16000 ? '' : c.thumb,
+        thumbInVault: true
+      }))
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(slimState));
   } catch (e) {
-    console.warn('Falha ao salvar no localStorage:', e);
+    try {
+      const emergencySlim = {
+        ...state,
+        customCatalog: (state.customCatalog || []).map((c) => ({
+          ...c,
+          thumb: '',
+          thumbInVault: true
+        }))
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(emergencySlim));
+    } catch (e2) {
+      console.warn('Falha ao salvar no localStorage:', e2 || e);
+    }
   }
 }
 
+// ---------------- REPETIÇÃO ESPAÇADA POR OBJETO E APARTAMENTO (DOENÇA) ----------------
+export const SRS_INTERVALS_DAYS = [1, 3, 7, 15, 30, 60];
+export const DEFAULT_DAILY_GOAL_TARGET = 5;
+
+export function getTodayDateKey() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function ensureDailyGoal(state) {
+  const today = getTodayDateKey();
+  if (!state.dailyGoal || state.dailyGoal.date !== today) {
+    state.dailyGoal = {
+      date: today,
+      count: 0,
+      target: Number(state?.dailyGoal?.target) > 0 ? Number(state.dailyGoal.target) : DEFAULT_DAILY_GOAL_TARGET
+    };
+  }
+  return state.dailyGoal;
+}
+
+export function recordDailyReview(state, delta = 1) {
+  const dg = ensureDailyGoal(state);
+  dg.count += Math.max(0, Number(delta) || 0);
+  return dg;
+}
+
+export function getObjectSrsState(obj, apartment = null, building = null, defaultThresholdDays = 14) {
+  const now = Date.now();
+  const srs = obj?.srs;
+
+  if (srs && srs.nextReviewAt) {
+    const nextMs = new Date(srs.nextReviewAt).getTime();
+    const diffDays = (now - nextMs) / 86400000;
+    const isDue = diffDays >= -0.35; // vence no dia (~8h de janela antecipada)
+    const status = diffDays >= 2 ? 'old' : isDue ? 'worn' : 'new';
+    return {
+      status,
+      isDue,
+      overdueDays: Math.max(0, diffDays),
+      daysUntilNext: Math.max(0, -diffDays),
+      intervalDays: Number(srs.intervalDays) || 1,
+      reps: Number(srs.reps) || 0,
+      nextReviewAt: srs.nextReviewAt,
+      lastReviewedAt: srs.lastReviewedAt || null
+    };
+  }
+
+  // Fallback para objetos ainda não avaliados no sistema de repetição espaçada
+  const refIso = apartment?.lastReviewedAt || building?.lastReviewedAt;
+  const limit = Number(building?.decayDays) > 0 ? Number(building.decayDays) : defaultThresholdDays;
+  const daysSince = refIso ? (now - new Date(refIso).getTime()) / 86400000 : limit + 1;
+
+  if (daysSince > limit) {
+    return {
+      status: 'old',
+      isDue: true,
+      overdueDays: Math.max(2.1, daysSince - limit * 0.5),
+      daysUntilNext: 0,
+      intervalDays: 0,
+      reps: 0,
+      nextReviewAt: null,
+      lastReviewedAt: refIso || null
+    };
+  }
+  if (daysSince >= Math.min(3, limit * 0.35)) {
+    return {
+      status: 'worn',
+      isDue: true,
+      overdueDays: Math.max(0.2, daysSince - 2),
+      daysUntilNext: 0,
+      intervalDays: 0,
+      reps: 0,
+      nextReviewAt: null,
+      lastReviewedAt: refIso || null
+    };
+  }
+  return {
+    status: 'new',
+    isDue: false,
+    overdueDays: 0,
+    daysUntilNext: Math.max(1, Math.round(limit * 0.45 - daysSince)),
+    intervalDays: 1,
+    reps: 0,
+    nextReviewAt: null,
+    lastReviewedAt: refIso || null
+  };
+}
+
+export function previewNextIntervalDays(obj, rating) {
+  const curInterval = Number(obj?.srs?.intervalDays) || 0;
+  if (rating === 'forgot') return 1;
+
+  if (curInterval <= 0) {
+    return rating === 'easy' ? 7 : 3;
+  }
+
+  let idx = SRS_INTERVALS_DAYS.findIndex((d) => d >= curInterval);
+  if (idx < 0) idx = SRS_INTERVALS_DAYS.length - 1;
+
+  if (rating === 'easy') {
+    const nextIdx = Math.min(SRS_INTERVALS_DAYS.length - 1, idx + 2);
+    return SRS_INTERVALS_DAYS[nextIdx];
+  }
+  // 'medium'
+  const nextIdx = Math.min(SRS_INTERVALS_DAYS.length - 1, idx + 1);
+  return SRS_INTERVALS_DAYS[nextIdx];
+}
+
+export function applyObjectSrsRating(obj, apartment, building, rating) {
+  const intervalDays = previewNextIntervalDays(obj, rating);
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const nextReviewAt = new Date(now + intervalDays * 86400000).toISOString();
+  const prevReps = Number(obj?.srs?.reps) || 0;
+  const prevLapses = Number(obj?.srs?.lapses) || 0;
+
+  obj.srs = {
+    reps: rating === 'forgot' ? 0 : prevReps + 1,
+    lapses: rating === 'forgot' ? prevLapses + 1 : prevLapses,
+    intervalDays,
+    lastRating: rating,
+    lastReviewedAt: nowIso,
+    nextReviewAt
+  };
+
+  if (apartment) apartment.lastReviewedAt = nowIso;
+  if (building) building.lastReviewedAt = nowIso;
+  return obj.srs;
+}
+
+export function getApartmentCondition(apartment, building = null, thresholdDays = 14) {
+  const objs = [];
+  (apartment?.rooms || []).forEach((rm) => {
+    if (rm.isBibliography) return;
+    (rm.objects || []).forEach((obj) => {
+      if (obj.title || obj.summary) objs.push(obj);
+    });
+  });
+
+  if (objs.length === 0) {
+    const refIso = apartment?.lastReviewedAt || building?.lastReviewedAt;
+    const limit = Number(building?.decayDays) > 0 ? Number(building.decayDays) : thresholdDays;
+    const days = refIso ? (Date.now() - new Date(refIso).getTime()) / 86400000 : 0;
+    const condition = days <= limit * 0.45 ? 'new' : days <= limit ? 'worn' : 'old';
+    return { condition, dueCount: 0, overdueCount: 0, totalCount: 0, minDaysUntilNext: null };
+  }
+
+  let dueCount = 0;
+  let overdueCount = 0;
+  let minDaysUntilNext = Infinity;
+
+  objs.forEach((obj) => {
+    const st = getObjectSrsState(obj, apartment, building, thresholdDays);
+    if (st.isDue) dueCount++;
+    if (st.status === 'old') overdueCount++;
+    if (st.daysUntilNext < minDaysUntilNext) minDaysUntilNext = st.daysUntilNext;
+  });
+
+  const condition =
+    overdueCount > 0 || dueCount >= Math.max(2, Math.ceil(objs.length * 0.7))
+      ? overdueCount > 0 ? 'old' : 'worn'
+      : dueCount > 0
+        ? 'worn'
+        : 'new';
+
+  return {
+    condition,
+    dueCount,
+    overdueCount,
+    totalCount: objs.length,
+    minDaysUntilNext: Number.isFinite(minDaysUntilNext) ? Math.ceil(minDaysUntilNext) : 0
+  };
+}
+
 export function getBuildingCondition(building, thresholdDays = 14) {
+  const aps = [];
+  (building?.floors || []).forEach((f) => {
+    (f.apartments || []).forEach((ap) => aps.push(ap));
+  });
+
+  const apStats = aps
+    .map((ap) => getApartmentCondition(ap, building, thresholdDays))
+    .filter((s) => s.totalCount > 0);
+
+  if (apStats.length > 0) {
+    const totalDue = apStats.reduce((a, s) => a + s.dueCount, 0);
+    const hasOldAp = apStats.some((s) => s.condition === 'old');
+    const hasWornAp = apStats.some((s) => s.condition === 'worn');
+    if (hasOldAp) return 'old';
+    if (hasWornAp || totalDue > 0) return 'worn';
+    return 'new';
+  }
+
   const limit = Number(building.decayDays) > 0 ? Number(building.decayDays) : thresholdDays;
   const days = (Date.now() - new Date(building.lastReviewedAt).getTime()) / 86400000;
   if (days <= limit * 0.45) return 'new';
   if (days <= limit) return 'worn';
   return 'old';
+}
+
+export function collectDueReviewQueue(
+  state,
+  { buildingId = null, apartmentId = null, limit = 5, includeUpcoming = false } = {}
+) {
+  const defaultThreshold = state?.decayThresholdDays || 14;
+  const allStudy = [];
+
+  (state?.buildings || []).forEach((b) => {
+    if (buildingId && b.id !== buildingId) return;
+    (b.floors || []).forEach((f) => {
+      (f.apartments || []).forEach((ap) => {
+        if (apartmentId && ap.id !== apartmentId) return;
+        (ap.rooms || []).forEach((rm) => {
+          if (rm.isBibliography) return;
+          (rm.objects || []).forEach((obj) => {
+            if (!obj.title && !obj.summary) return;
+            const srsInfo = getObjectSrsState(obj, ap, b, defaultThreshold);
+            allStudy.push({ obj, room: rm, ap, floor: f, building: b, srsInfo });
+          });
+        });
+      });
+    });
+  });
+
+  const dueOnly = allStudy.filter((item) => item.srsInfo.isDue);
+  const pool = dueOnly.length > 0 ? dueOnly : includeUpcoming ? allStudy : [];
+
+  pool.sort((a, b) => {
+    if (a.srsInfo.isDue !== b.srsInfo.isDue) return a.srsInfo.isDue ? -1 : 1;
+    if (Math.abs(b.srsInfo.overdueDays - a.srsInfo.overdueDays) > 0.05) {
+      return b.srsInfo.overdueDays - a.srsInfo.overdueDays;
+    }
+    return a.srsInfo.daysUntilNext - b.srsInfo.daysUntilNext;
+  });
+
+  return {
+    items: pool.slice(0, limit),
+    totalDueCount: dueOnly.length,
+    totalStudyObjects: allStudy.length
+  };
 }

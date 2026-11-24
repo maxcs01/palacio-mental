@@ -17,8 +17,25 @@ import {
   migrateSavedBuildings,
   loadState,
   saveState,
-  getBuildingCondition
+  getBuildingCondition,
+  ensureDailyGoal,
+  recordDailyReview,
+  getObjectSrsState,
+  previewNextIntervalDays,
+  applyObjectSrsRating,
+  getApartmentCondition,
+  collectDueReviewQueue
 } from './data.js';
+import {
+  saveCustomSpritesToVault,
+  saveWorldSnapshotToVault,
+  loadWorldSnapshotFromVault,
+  hydrateStateFromVault,
+  getStorageStats,
+  formatBytes,
+  buildBackupJson,
+  parseBackupJson
+} from './storageVault.js';
 import {
   drawIsoBox,
   drawIllustratedCityLandscape,
@@ -196,11 +213,13 @@ const breadcrumbEl = document.getElementById('breadcrumb');
 const btnPerfMode = document.getElementById('btnPerfMode');
 const btnInstallApp = document.getElementById('btnInstallApp');
 const btnFriends = document.getElementById('btnFriends');
+const btnBackup = document.getElementById('btnBackup');
 const btnAccount = document.getElementById('btnAccount');
 const btnDayNight = document.getElementById('btnDayNight');
 const btnMusic = document.getElementById('btnMusic');
 const btnBack = document.getElementById('btnBack');
 const btnRonda = document.getElementById('btnRonda');
+const dailyGoalBadge = document.getElementById('dailyGoalBadge');
 const cityHud = document.getElementById('cityHud');
 const cityStatusPill = document.getElementById('cityStatusPill');
 const receptionHud = document.getElementById('receptionHud');
@@ -612,13 +631,29 @@ function screenToWorld(sx, sy) {
   };
 }
 
+function updateDailyGoalBadge() {
+  const dg = ensureDailyGoal(state);
+  const target = dg.target || 5;
+  const dueRes = collectDueReviewQueue(state, { limit: 999 });
+  if (dailyGoalBadge) {
+    dailyGoalBadge.textContent = dg.count >= target ? `✓ ${dg.count}/${target}` : `${dg.count}/${target}`;
+  }
+  if (btnRonda) {
+    btnRonda.classList.toggle('goal-met', dg.count >= target);
+    btnRonda.title =
+      dueRes.totalDueCount > 0
+        ? `Ronda Rápida: ${dueRes.totalDueCount} objeto(s) aguardando revisão • Meta hoje: ${dg.count}/${target}`
+        : `Meta hoje: ${dg.count}/${target} • Tudo em dia!`;
+  }
+}
+
 function updateTopbar() {
   requestRedraw();
+  updateDailyGoalBadge();
   btnDayNight.textContent = state.isNight ? '🌙' : '☀️';
   if (view.mode === 'city') {
     breadcrumbEl.textContent = 'The Reds';
     btnBack.classList.add('hidden');
-    btnRonda.classList.remove('hidden');
     cityHud.classList.remove('hidden');
     receptionHud.classList.add('hidden');
     roomHud.classList.add('hidden');
@@ -629,7 +664,6 @@ function updateTopbar() {
     const b = getCurrentBuilding();
     breadcrumbEl.textContent = `The Reds → ${b ? b.name : ''} (Recepção)`;
     btnBack.classList.remove('hidden');
-    btnRonda.classList.add('hidden');
     cityHud.classList.add('hidden');
     receptionHud.classList.remove('hidden');
     roomHud.classList.add('hidden');
@@ -641,7 +675,6 @@ function updateTopbar() {
     const r = getCurrentRoom();
     breadcrumbEl.textContent = `${b?.name || ''} → ${a?.name || ''} → ${r?.name || ''}`;
     btnBack.classList.remove('hidden');
-    btnRonda.classList.add('hidden');
     cityHud.classList.add('hidden');
     receptionHud.classList.add('hidden');
     roomHud.classList.toggle('hidden', editMode);
@@ -1066,8 +1099,9 @@ function openReceptionModal() {
   if (!b) return;
   const canEdit = sharedRole !== 'viewer';
   const cond = getBuildingCondition(b, state.decayThresholdDays);
-  const condText = cond === 'new' ? 'Novo (em dia)' : cond === 'worn' ? 'Meio desgastado' : 'Velho (precisa revisar!)';
+  const condText = cond === 'new' ? 'Novo (em dia)' : cond === 'worn' ? 'Revisões para hoje' : 'Atrasado (precisa revisar!)';
   const condClass = cond === 'new' ? 'status-new' : cond === 'worn' ? 'status-worn' : 'status-old';
+  const bDue = collectDueReviewQueue(state, { buildingId: b.id, limit: 999 });
 
   const wrap = document.createElement('div');
   wrap.className = 'card-box';
@@ -1075,10 +1109,11 @@ function openReceptionModal() {
     <div class="crud-row-head">
       <div>
         <strong>Recepção — ${escapeHtml(b.name)}</strong><br/>
-        <small style="color:var(--muted)">Quadro de Índice: crie, renomeie ou exclua andares, apartamentos e quartos</small>
+        <small style="color:var(--muted)">Quadro de Índice: crie, acompanhe revisões vencidas ou inicie uma ronda</small>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
         <span class="status-pill ${condClass}">${condText}</span>
+        ${bDue.totalStudyObjects > 0 ? `<button id="btnRecQuickRound" class="btn-primary btn-sm">⚡ Ronda (${bDue.totalDueCount})</button>` : ''}
         ${canEdit ? '<button id="btnRecEditBuilding" class="btn-ghost btn-sm" title="Editar ou excluir este prédio">✏️ Prédio</button>' : ''}
       </div>
     </div>
@@ -1134,13 +1169,38 @@ function openReceptionModal() {
         apRow.style.paddingTop = '6px';
         apRow.style.borderTop = '1px solid var(--border-soft)';
 
+        const apCond = getApartmentCondition(ap, b, state.decayThresholdDays);
+        const apPillCls =
+          apCond.condition === 'new' ? 'status-new' : apCond.condition === 'worn' ? 'status-worn' : 'status-old';
+        const apPillTxt =
+          apCond.totalCount === 0
+            ? 'Vazio'
+            : apCond.overdueCount > 0
+              ? `🔴 ${apCond.overdueCount} atrasado${apCond.overdueCount > 1 ? 's' : ''}`
+              : apCond.dueCount > 0
+                ? `🟡 ${apCond.dueCount} p/ hoje`
+                : `🟢 Em dia (${apCond.minDaysUntilNext || 1}d)`;
+
         const apHead = document.createElement('div');
         apHead.className = 'crud-row-head';
         apHead.style.marginBottom = '6px';
-        apHead.innerHTML = `<div style="font-size:13px;color:var(--accent);">🚪 Apartamento: <strong>${escapeHtml(ap.name)}</strong></div>`;
+        apHead.innerHTML = `
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;color:var(--accent);">
+            <span>🚪 <strong>${escapeHtml(ap.name)}</strong></span>
+            ${apCond.totalCount > 0 ? `<span class="status-pill ${apPillCls}">${apPillTxt}</span>` : ''}
+          </div>
+        `;
+        const apActs = document.createElement('div');
+        apActs.className = 'crud-mini-actions';
+        if (apCond.totalCount > 0) {
+          const revAp = document.createElement('button');
+          revAp.className = 'btn-secondary btn-sm';
+          revAp.title = 'Revisar os objetos desta doença agora';
+          revAp.textContent = '⚡ Revisar';
+          revAp.onclick = () => openQuickRoundModal({ buildingId: b.id, apartmentId: ap.id });
+          apActs.appendChild(revAp);
+        }
         if (canEdit) {
-          const apActs = document.createElement('div');
-          apActs.className = 'crud-mini-actions';
           const renAp = document.createElement('button');
           renAp.className = 'btn-ghost btn-sm';
           renAp.title = 'Renomear apartamento';
@@ -1165,8 +1225,8 @@ function openReceptionModal() {
           };
           apActs.appendChild(renAp);
           apActs.appendChild(delAp);
-          apHead.appendChild(apActs);
         }
+        if (apActs.childElementCount > 0) apHead.appendChild(apActs);
         apRow.appendChild(apHead);
 
         const btnWrap = document.createElement('div');
@@ -1280,6 +1340,8 @@ function openReceptionModal() {
   openModal(`🏥 Recepção: ${b.name}`, wrap);
   const editBBtn = document.getElementById('btnRecEditBuilding');
   if (editBBtn) editBBtn.onclick = () => openEditBuildingModal(b);
+  const recQuickBtn = document.getElementById('btnRecQuickRound');
+  if (recQuickBtn) recQuickBtn.onclick = () => openQuickRoundModal({ buildingId: b.id });
 }
 
 function enterRoom(buildingId, floorId, apartmentId, roomId) {
@@ -1392,11 +1454,28 @@ function openObjectModal(obj, room) {
   const wrap = document.createElement('div');
 
   if (!editMode) {
+    const bCur = getCurrentBuilding();
+    const apCur = getCurrentApartment();
+    const srsSt = getObjectSrsState(obj, apCur, bCur, state.decayThresholdDays);
+    const srsCls = srsSt.status === 'new' ? 'status-new' : srsSt.status === 'worn' ? 'status-worn' : 'status-old';
+    const srsTxt =
+      srsSt.status === 'old'
+        ? '🔴 Revisão atrasada'
+        : srsSt.isDue
+          ? '🟡 Revisar hoje'
+          : `🟢 Em dia • próx. em ${Math.max(1, Math.ceil(srsSt.daysUntilNext))}d`;
+    const dForgot = previewNextIntervalDays(obj, 'forgot');
+    const dMedium = previewNextIntervalDays(obj, 'medium');
+    const dEasy = previewNextIntervalDays(obj, 'easy');
+
     wrap.innerHTML = `
       <div class="obj-modal-hero">
         <img src="${cat?.thumb || '/assets/book.jpg'}" class="${obj.flip ? 'flipped' : ''}" alt="${escapeHtml(cat?.name || '')}" />
-        <div>
-          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">${escapeHtml(cat?.name || 'Objeto')}</div>
+        <div style="flex:1;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">${escapeHtml(cat?.name || 'Objeto')}</span>
+            <span class="status-pill ${srsCls}">${srsTxt}</span>
+          </div>
           <h3 style="color:var(--accent);font-size:17px;margin-top:2px;">${escapeHtml(obj.title || 'Sem título')}</h3>
         </div>
       </div>
@@ -1407,12 +1486,35 @@ function openObjectModal(obj, room) {
           <strong>${escapeHtml(obj.pdfLabel || 'Sem referência')}</strong>
         </div>
       </div>
+      ${
+        sharedRole !== 'viewer'
+          ? `<div class="card-box" style="gap:6px;">
+              <small style="color:var(--muted);font-weight:700;">Agendar próxima revisão (Repetição Espaçada):</small>
+              <div class="qr-rating-grid">
+                <button type="button" class="qr-rate-btn qr-rate-forgot" data-obj-rate="forgot">😓 Esqueci<small>${dForgot} dia</small></button>
+                <button type="button" class="qr-rate-btn qr-rate-medium" data-obj-rate="medium">🙂 Médio<small>${dMedium} dias</small></button>
+                <button type="button" class="qr-rate-btn qr-rate-easy" data-obj-rate="easy">🚀 Fácil<small>${dEasy} dias</small></button>
+              </div>
+            </div>`
+          : ''
+      }
       <div class="row-actions">
         <button id="btnOpenRef" class="btn-primary">📄 Abrir no PDF</button>
         ${sharedRole !== 'viewer' ? '<button id="btnEditObj" class="btn-secondary">✏️ Editar Objeto</button>' : ''}
       </div>
     `;
     openModal(`${cat?.icon || '📦'} Revisão do Objeto`, wrap);
+
+    wrap.querySelectorAll('[data-obj-rate]').forEach((rateBtn) => {
+      rateBtn.onclick = () => {
+        const res = applyObjectSrsRating(obj, apCur, bCur, rateBtn.dataset.objRate);
+        recordDailyReview(state, 1);
+        persistState();
+        updateTopbar();
+        closeModal();
+        showToast(`✅ Agendado! "${obj.title || 'Objeto'}" volta em ${res.intervalDays} dia${res.intervalDays === 1 ? '' : 's'}.`);
+      };
+    });
 
     document.getElementById('btnOpenRef').onclick = () => {
       const ap = getCurrentApartment();
@@ -2151,6 +2253,16 @@ function renderRoom() {
     }
   });
 
+  const bCur = getCurrentBuilding();
+  const apCur = getCurrentApartment();
+  room.objects.forEach((obj) => {
+    if (!editMode && (obj.title || obj.summary)) {
+      obj._srsStatus = getObjectSrsState(obj, apCur, bCur, state.decayThresholdDays).status;
+    } else {
+      obj._srsStatus = null;
+    }
+  });
+
   drawModularRoom(ctx, {
     cells,
     objects: room.objects,
@@ -2785,10 +2897,8 @@ btnBack.onclick = () => {
   }
 };
 
-btnRonda.onclick = () => {
-  const sorted = [...state.buildings].sort((a, b) => new Date(a.lastReviewedAt) - new Date(b.lastReviewedAt));
-  if (sorted.length > 0) enterBuilding(sorted[0].id);
-};
+btnRonda.onclick = () => openQuickRoundModal();
+if (btnBackup) btnBackup.onclick = openBackupModal;
 
 btnToggleEdit.onclick = () => setEditMode(true);
 btnCloseEdit.onclick = () => setEditMode(false);
@@ -2880,12 +2990,27 @@ if (btnDeleteCurrentRoom) {
 
 btnRoomRonda.onclick = () => {
   const b = getCurrentBuilding();
+  const ap = getCurrentApartment();
+  const rm = getCurrentRoom();
   if (b) {
     const before = { ...(state.mayorUnlocked || {}) };
-    b.lastReviewedAt = new Date().toISOString();
+    const nowIso = new Date().toISOString();
+    b.lastReviewedAt = nowIso;
+    if (ap) ap.lastReviewedAt = nowIso;
+    let reviewedHere = 0;
+    if (rm && Array.isArray(rm.objects)) {
+      rm.objects.forEach((o) => {
+        if ((o.title || o.summary) && getObjectSrsState(o, ap, b, state.decayThresholdDays).isDue) {
+          applyObjectSrsRating(o, ap, b, 'medium');
+          reviewedHere++;
+        }
+      });
+    }
+    if (reviewedHere > 0) recordDailyReview(state, reviewedHere);
     state.rondasConcluidas = (state.rondasConcluidas || 0) + 1;
     const after = syncMayorMilestones(state);
     persistState();
+    updateTopbar();
 
     let msg = `🩺 Ronda concluída! "${b.name}" recuperou o vigor.`;
     if (!before.museum && after.museum) msg += ' 🏛️ O Prefeito inaugurou o MUSEU DA MEDICINA (permanente)!';
@@ -2914,7 +3039,7 @@ function makeCatalogCard(item, isCustom = false) {
   btn.className = `catalog-card ${item.id === selectedPaletteType ? 'active' : ''}`;
   btn.innerHTML = `
     <div class="catalog-thumb">
-      <img src="${item.thumb}" class="${selectedPaletteFlip ? 'flipped' : ''}" alt="${escapeHtml(item.shortName || item.name)}" loading="lazy" />
+      <img src="${item.thumb || '/assets/book.jpg'}" class="${selectedPaletteFlip ? 'flipped' : ''}" alt="${escapeHtml(item.shortName || item.name)}" loading="lazy" />
     </div>
     <span>${escapeHtml(item.shortName || item.name)}</span>
   `;
@@ -3649,14 +3774,333 @@ searchInput.addEventListener('input', () => {
   searchResults.classList.remove('hidden');
 });
 
+// ---------------- MODO RONDA RÁPIDA (RECALL ATIVO + META DIÁRIA) ----------------
+function openQuickRoundModal(options = {}) {
+  const { buildingId = null, apartmentId = null, includeUpcoming = false } = options;
+  const scopeLabel = apartmentId
+    ? 'deste Apartamento'
+    : buildingId
+      ? 'deste Prédio'
+      : 'da Cidade';
+
+  const result = collectDueReviewQueue(state, {
+    buildingId,
+    apartmentId,
+    limit: 5,
+    includeUpcoming
+  });
+
+  if (result.items.length === 0) {
+    const dg = ensureDailyGoal(state);
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="card-box" style="align-items:center;text-align:center;padding:18px;">
+        <div style="font-size:36px;">🎉</div>
+        <h3 style="color:var(--accent-2);">Tudo em dia ${scopeLabel}!</h3>
+        <p style="font-size:13px;color:var(--muted);">
+          Nenhum objeto vencido para revisar agora. Meta de hoje: <strong>${dg.count}/${dg.target || 5} objetos</strong>.
+        </p>
+        <div class="row-actions" style="justify-content:center;margin-top:6px;">
+          ${
+            result.totalStudyObjects > 0
+              ? '<button id="btnQrTrainAnyway" class="btn-primary">🔥 Treinar 5 mesmo assim</button>'
+              : ''
+          }
+          <button id="btnQrCloseEmpty" class="btn-secondary">Fechar</button>
+        </div>
+      </div>
+    `;
+    openModal('⚡ Ronda Rápida de 3 Minutos', wrap);
+    document.getElementById('btnQrCloseEmpty').onclick = closeModal;
+    const trainBtn = document.getElementById('btnQrTrainAnyway');
+    if (trainBtn) {
+      trainBtn.onclick = () => openQuickRoundModal({ buildingId, apartmentId, includeUpcoming: true });
+    }
+    return;
+  }
+
+  const queue = result.items;
+  let currentIdx = 0;
+  let revealed = false;
+  let forgotCount = 0;
+  let rememberedCount = 0;
+
+  const wrap = document.createElement('div');
+  openModal('⚡ Ronda Rápida — Recall Ativo', wrap);
+
+  function renderStep() {
+    if (currentIdx >= queue.length) {
+      const before = { ...(state.mayorUnlocked || {}) };
+      state.rondasConcluidas = (state.rondasConcluidas || 0) + 1;
+      const after = syncMayorMilestones(state);
+      persistState();
+      updateTopbar();
+      updateCityStatusPill();
+
+      let mayorMsg = '';
+      if (!before.museum && after.museum) mayorMsg = '🏛️ O Prefeito inaugurou o MUSEU DA MEDICINA na cidade!';
+      else if (!before.fountain && after.fountain) mayorMsg = '⛲ O Prefeito inaugurou a FONTE DA PRAÇA!';
+      else if (!before.residences && after.residences) mayorMsg = '🏡 O Prefeito inaugurou NOVAS CASAS na cidade!';
+      else if (!before.pier && after.pier) mayorMsg = '⛵ O Prefeito inaugurou o DECK E BARQUINHO!';
+
+      const dg = ensureDailyGoal(state);
+      const moreDue = collectDueReviewQueue(state, { buildingId, apartmentId, limit: 5 });
+
+      wrap.innerHTML = `
+        <div class="card-box" style="align-items:center;text-align:center;padding:18px;">
+          <div style="font-size:38px;">🏆</div>
+          <h3 style="color:var(--accent-2);">Ronda Rápida Concluída!</h3>
+          <p style="font-size:13px;color:var(--muted);">
+            Você revisou <strong>${queue.length}</strong> objeto${queue.length > 1 ? 's' : ''} (${rememberedCount} lembrados • ${forgotCount} reforçados para 1 dia).<br/>
+            Meta de hoje: <strong>${dg.count}/${dg.target || 5} objetos</strong>${dg.count >= (dg.target || 5) ? ' ✅' : ''}
+          </p>
+          ${mayorMsg ? `<div class="gen-status-pill" style="margin-top:4px;">${mayorMsg}</div>` : ''}
+          <div class="row-actions" style="justify-content:center;margin-top:8px;">
+            ${moreDue.totalDueCount > 0 ? `<button id="btnQrMore" class="btn-primary">⚡ Fazer +${moreDue.items.length} (${moreDue.totalDueCount} restantes)</button>` : ''}
+            <button id="btnQrFinish" class="btn-success">✓ Voltar ao Estudo</button>
+          </div>
+        </div>
+      `;
+      document.getElementById('btnQrFinish').onclick = closeModal;
+      const moreBtn = document.getElementById('btnQrMore');
+      if (moreBtn) moreBtn.onclick = () => openQuickRoundModal({ buildingId, apartmentId });
+      return;
+    }
+
+    const entry = queue[currentIdx];
+    const { obj, room, ap, building, srsInfo } = entry;
+    const cat = findCatalogItem(state, obj.type);
+    const dg = ensureDailyGoal(state);
+    const pct = Math.round((currentIdx / queue.length) * 100);
+    const dForgot = previewNextIntervalDays(obj, 'forgot');
+    const dMedium = previewNextIntervalDays(obj, 'medium');
+    const dEasy = previewNextIntervalDays(obj, 'easy');
+    const statusLabel =
+      srsInfo.status === 'old'
+        ? '🔴 Atrasado'
+        : srsInfo.isDue
+          ? '🟡 Vence hoje'
+          : '🟢 Treino extra';
+
+    wrap.innerHTML = `
+      <div class="qr-progress-wrap">
+        <div class="qr-progress-top">
+          <span>Cartão <strong>${currentIdx + 1}</strong> de <strong>${queue.length}</strong> (${result.totalDueCount} na fila)</span>
+          <span>Meta hoje: <strong>${dg.count}/${dg.target || 5}</strong></span>
+        </div>
+        <div class="qr-progress-bar">
+          <div class="qr-progress-fill" style="width:${pct}%"></div>
+        </div>
+      </div>
+
+      <div class="qr-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="qr-crumb">${escapeHtml(building.name)} → ${escapeHtml(ap.name)} → ${escapeHtml(room.name)}</span>
+          <span class="status-pill ${srsInfo.status === 'new' ? 'status-new' : srsInfo.status === 'worn' ? 'status-worn' : 'status-old'}">${statusLabel}</span>
+        </div>
+
+        <div class="qr-hero">
+          <img class="qr-hero-img ${obj.flip ? 'flipped' : ''}" src="${cat?.thumb || '/assets/book.jpg'}" alt="${escapeHtml(cat?.name || '')}" />
+          <div>
+            <small style="color:var(--muted);text-transform:uppercase;font-size:10.5px;">${escapeHtml(cat?.name || 'Objeto de Memória')}</small>
+            <h3 style="color:var(--text);font-size:17px;margin-top:2px;">${escapeHtml(obj.title || 'Sem título')}</h3>
+          </div>
+        </div>
+
+        ${
+          !revealed
+            ? `
+          <div class="qr-hidden-curtain">
+            <span style="font-size:13px;color:var(--muted);">Tente recordar mentalmente os pontos-chave associados a este objeto no cômodo antes de virar o cartão!</span>
+            <button type="button" id="btnQrReveal" class="btn-primary">👁️ Mostrar Resposta</button>
+          </div>`
+            : `
+          <div class="qr-answer-box">
+            <p style="font-size:13.5px;line-height:1.5;">${escapeHtml(obj.summary || 'Sem resumo escrito — abra no PDF ou no quarto para completar.')}</p>
+            ${
+              obj.pdfLabel
+                ? `<div style="border-top:1px solid var(--border-soft);padding-top:6px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <small style="color:var(--muted)">📄 ${escapeHtml(obj.pdfLabel)}</small>
+                    <button type="button" id="btnQrOpenPdf" class="btn-ghost btn-sm">Abrir PDF</button>
+                  </div>`
+                : ''
+            }
+          </div>
+          <div class="qr-rating-grid">
+            <button type="button" class="qr-rate-btn qr-rate-forgot" data-rate="forgot">😓 Esqueci<small>${dForgot} dia</small></button>
+            <button type="button" class="qr-rate-btn qr-rate-medium" data-rate="medium">🙂 Médio<small>${dMedium} dias</small></button>
+            <button type="button" class="qr-rate-btn qr-rate-easy" data-rate="easy">🚀 Fácil<small>${dEasy} dias</small></button>
+          </div>`
+        }
+
+        <div class="row-actions" style="justify-content:space-between;">
+          <button type="button" id="btnQrGoRoom" class="btn-ghost btn-sm">📍 Ir até este quarto</button>
+          <button type="button" id="btnQrSkip" class="btn-ghost btn-sm">Pular →</button>
+        </div>
+      </div>
+    `;
+
+    const revealBtn = wrap.querySelector('#btnQrReveal');
+    if (revealBtn) {
+      revealBtn.onclick = () => {
+        revealed = true;
+        renderStep();
+      };
+    }
+
+    const pdfBtn = wrap.querySelector('#btnQrOpenPdf');
+    if (pdfBtn) {
+      pdfBtn.onclick = () => {
+        const bibRoom = ap?.rooms?.find((r) => r.isBibliography);
+        const linkedBib = bibRoom?.pdfs?.find((p) => p.id === obj.bibPdfId);
+        openPdfViewer({
+          title: obj.pdfLabel || obj.title,
+          url: linkedBib?.url || obj.pdfUrl || '',
+          page: obj.pdfPage || 1,
+          quote: obj.pdfQuote || '',
+          localPdfId: linkedBib?.sourceType === 'local' ? linkedBib.id : null
+        });
+      };
+    }
+
+    wrap.querySelectorAll('[data-rate]').forEach((btn) => {
+      btn.onclick = () => {
+        const rating = btn.dataset.rate;
+        if (sharedRole !== 'viewer') {
+          applyObjectSrsRating(obj, ap, building, rating);
+          recordDailyReview(state, 1);
+          persistState();
+          updateDailyGoalBadge();
+        }
+        if (rating === 'forgot') forgotCount++;
+        else rememberedCount++;
+        revealed = false;
+        currentIdx++;
+        renderStep();
+      };
+    });
+
+    wrap.querySelector('#btnQrGoRoom').onclick = () => {
+      closeModal();
+      enterRoom(building.id, entry.floor.id, ap.id, room.id);
+    };
+    wrap.querySelector('#btnQrSkip').onclick = () => {
+      revealed = false;
+      currentIdx++;
+      renderStep();
+    };
+  }
+
+  renderStep();
+}
+
+// ---------------- BACKUP EM 1 CLIQUE & ARMAZENAMENTO AMPLIADO (INDEXEDDB) ----------------
+async function openBackupModal() {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="card-box"><small style="color:var(--muted)">Calculando uso de memória do seu dispositivo...</small></div>`;
+  openModal('💾 Backup & Armazenamento', wrap);
+
+  const stats = await getStorageStats(state);
+  const localPct = Math.min(100, Math.round((stats.localStorageBytes / (5 * 1024 * 1024)) * 100));
+
+  wrap.innerHTML = `
+    <div class="card-box">
+      <strong>Resumo do Seu Palácio</strong>
+      <div style="font-size:12.5px;color:var(--muted);line-height:1.5;">
+        🏛️ <strong>${stats.buildingsCount}</strong> prédios •
+        🚪 <strong>${stats.apartmentsCount}</strong> doenças •
+        📦 <strong>${stats.objectsCount}</strong> objetos de estudo<br/>
+        ✂️ <strong>${stats.customSpriteCount}</strong> imagens recortadas (${formatBytes(stats.spritesBytes)} no Cofre IndexedDB)<br/>
+        📄 <strong>${stats.localPdfCount}</strong> PDFs locais •
+        Cache rápido (localStorage): <strong>${formatBytes(stats.localStorageBytes)}</strong> (${localPct}% de 5 MB)
+      </div>
+      <small style="color:var(--accent-2);">
+        ✓ As suas imagens recortadas ficam protegidas no banco interno de alta capacidade (IndexedDB) para não estourar o limite de 5 MB do navegador.
+      </small>
+    </div>
+
+    <div class="card-box">
+      <strong>Exportar Backup Completo (.json)</strong>
+      <small style="color:var(--muted);">
+        Baixa um único arquivo com todos os seus prédios, resumos, plantas, histórico de revisão espaçada e todas as imagens recortadas.
+      </small>
+      <button id="btnExportBackupFile" class="btn-primary">⬇️ Baixar Backup Agora</button>
+    </div>
+
+    <div class="card-box">
+      <strong>Restaurar Backup (.json)</strong>
+      <small style="color:var(--muted);">
+        Carrega um arquivo salvo anteriormente e restaura tudo neste dispositivo${currentUser ? ' (e sincroniza com sua conta na nuvem)' : ''}.
+      </small>
+      <input id="inpImportBackupFile" type="file" accept="application/json,.json" />
+    </div>
+  `;
+
+  wrap.querySelector('#btnExportBackupFile').onclick = async () => {
+    try {
+      const jsonStr = await buildBackupJson(state);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `the-reds-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('⬇️ Backup baixado com sucesso!');
+    } catch (err) {
+      alert('Erro ao gerar backup: ' + (err?.message || err));
+    }
+  };
+
+  wrap.querySelector('#inpImportBackupFile').onchange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (sharedRole === 'viewer') {
+      return alert('Você está no modo Visitante e não pode sobrescrever este mundo.');
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const nextState = parseBackupJson(reader.result);
+        const totalB = nextState.buildings.length;
+        if (!confirm(`Restaurar este backup com ${totalB} prédio(s)? Os dados atuais deste navegador serão substituídos pelo arquivo.`)) {
+          return;
+        }
+        state = nextState;
+        migrateSavedBuildings(state);
+        syncMayorMilestones(state);
+        ensureDailyGoal(state);
+        await saveCustomSpritesToVault(state.customCatalog);
+        await saveWorldSnapshotToVault(state);
+        registerCustomSprites(state.customCatalog);
+        persistState();
+        renderObjectPalette();
+        goHome();
+        updateTopbar();
+        closeModal();
+        showToast(`✅ Backup restaurado com ${totalB} prédio(s)!`);
+      } catch (err) {
+        alert('Não foi possível restaurar o backup: ' + (err?.message || err));
+      }
+    };
+    reader.readAsText(file);
+  };
+}
+
 // ---------------- NUVEM & CONEXÃO MULTIPLAYER DESACOPLADA ----------------
 let currentUser = null;
 let cloudStatus = 'offline';
 
 function persistState(skipBroadcast = false) {
   syncMayorMilestones(state);
+  ensureDailyGoal(state);
   saveState(state);
+  saveCustomSpritesToVault(state.customCatalog).catch(() => {});
+  saveWorldSnapshotToVault(state).catch(() => {});
   requestRedraw();
+  updateDailyGoalBadge();
   if (!skipBroadcast && presenceConn && sharedRole !== 'viewer') {
     presenceConn.broadcast('world_sync', { state, senderId: myPeerId });
   }
@@ -3776,11 +4220,15 @@ async function initCloudSession() {
         if (!Array.isArray(state.customCatalog)) state.customCatalog = [];
         migrateSavedBuildings(state);
         syncMayorMilestones(state);
-        registerCustomSprites(state.customCatalog);
+        ensureDailyGoal(state);
         saveState(state);
+        saveCustomSpritesToVault(state.customCatalog).catch(() => {});
+        saveWorldSnapshotToVault(state).catch(() => {});
+        registerCustomSprites(state.customCatalog);
         renderObjectPalette();
         requestRedraw();
       } else if (!sharedWorldOwnerId || sharedWorldOwnerId === currentUser.id) {
+        await hydrateStateFromVault(state);
         await saveCloudWorld(currentUser.id, state);
       }
       cloudStatus = 'synced';
@@ -4036,5 +4484,33 @@ syncPerfModeButton();
 resizeCanvas();
 updateTopbar();
 updateAccountButton();
+
+// Hidrata miniaturas salvas em alta capacidade no IndexedDB logo no arranque
+(async () => {
+  try {
+    if (!localStorage.getItem('palacio_mental_city_v1')) {
+      const snap = await loadWorldSnapshotFromVault();
+      if (snap && Array.isArray(snap.buildings)) {
+        state = snap;
+        migrateSavedBuildings(state);
+        syncMayorMilestones(state);
+        ensureDailyGoal(state);
+      }
+    }
+    const hydrated = await hydrateStateFromVault(state);
+    if (Array.isArray(state.customCatalog) && state.customCatalog.length > 0) {
+      saveCustomSpritesToVault(state.customCatalog).catch(() => {});
+      if (hydrated) {
+        registerCustomSprites(state.customCatalog);
+        renderObjectPalette();
+      }
+    }
+    updateTopbar();
+    requestRedraw();
+  } catch (err) {
+    console.warn('Falha ao hidratar cofre local:', err);
+  }
+})();
+
 initCloudSession();
 requestAnimationFrame(loop);

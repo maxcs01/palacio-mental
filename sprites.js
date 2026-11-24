@@ -1235,7 +1235,7 @@ export function drawCar(ctx, x, y, color, axis = 'u') {
 }
 
 // ---------------- OBJETOS DOS QUARTOS ----------------
-export function drawRoomObject(ctx, type, cx, cy, tileW, { editMode = false, highlighted = false, alpha = 1, flip = false } = {}) {
+export function drawRoomObject(ctx, type, cx, cy, tileW, { editMode = false, highlighted = false, alpha = 1, flip = false, srsStatus = null } = {}) {
   ctx.save();
   ctx.globalAlpha = alpha;
   const tune = SPRITE_TUNING[type] || { scale: 1.20, yLift: 0.22, shadowRx: 0.32, shadowRy: 0.16 };
@@ -1285,15 +1285,29 @@ export function drawRoomObject(ctx, type, cx, cy, tileW, { editMode = false, hig
     } else {
       ctx.drawImage(sp, drawX, drawY, dw, dh);
     }
+  } else {
+    const s = tileW / 64;
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (flip) ctx.scale(-s, s);
+    else ctx.scale(s, s);
+    drawIsoBox(ctx, 0, 4, 28, 16, 18, '#ede9dd', '#cbd5e1', '#94a3b8', INK);
     ctx.restore();
-    return;
   }
 
-  const s = tileW / 64;
-  ctx.translate(cx, cy);
-  if (flip) ctx.scale(-s, s);
-  else ctx.scale(s, s);
-  drawIsoBox(ctx, 0, 4, 28, 16, 18, '#ede9dd', '#cbd5e1', '#94a3b8', INK);
+  // Indicador sutil de revisão pendente no canto do ladrilho (sem atrapalhar o desenho)
+  if (!editMode && (srsStatus === 'old' || srsStatus === 'worn')) {
+    const dotX = cx + tileW * tune.shadowRx * 0.85;
+    const dotY = cy + tileW * 0.14;
+    ctx.fillStyle = srsStatus === 'old' ? '#ef4444' : '#f59e0b';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 4.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
   ctx.restore();
 }
 
@@ -1795,7 +1809,8 @@ export function drawModularRoom(ctx, {
         editMode,
         highlighted: item.highlighted,
         alpha: movingObjectId === item.obj.id ? 0.65 : 1,
-        flip: Boolean(item.obj.flip)
+        flip: Boolean(item.obj.flip),
+        srsStatus: item.obj._srsStatus || null
       });
     } else if (item.kind === 'ghost') {
       const pt = isoPt(item.gx, item.gy, originX, originY, tileW, tileH);
