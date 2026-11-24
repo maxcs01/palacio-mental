@@ -245,6 +245,66 @@ export function screenToCityIso(wx, wy) {
   };
 }
 
+// 7 estilos de edifícios isométricos 2.5D para diferenciar visualmente cada especialidade!
+export const BUILDING_TYPES = [
+  {
+    id: 'city_hospital',
+    name: 'Hospital Clássico',
+    shortName: 'Hospital',
+    icon: '🏥',
+    thumb: '/assets/city-hospital.jpg',
+    desc: 'Clínica tradicional creme com cruz médica'
+  },
+  {
+    id: 'city_tower',
+    name: 'Torre Médica Moderna',
+    shortName: 'Torre UTI',
+    icon: '🏢',
+    thumb: '/assets/city-tower.png',
+    desc: 'Edifício envidraçado com heliponto no topo'
+  },
+  {
+    id: 'city_academy',
+    name: 'Faculdade Clássica',
+    shortName: 'Faculdade',
+    icon: '🏛️',
+    thumb: '/assets/city-academy.png',
+    desc: 'Colunas neoclássicas, tijolinho e cúpula verde'
+  },
+  {
+    id: 'city_lab',
+    name: 'Instituto & Laboratório',
+    shortName: 'Laboratório',
+    icon: '🔬',
+    thumb: '/assets/city-lab.png',
+    desc: 'Centro científico moderno com domo de vidro'
+  },
+  {
+    id: 'city_clinic',
+    name: 'Clínica Acolhedora',
+    shortName: 'Chalé Clínico',
+    icon: '🧸',
+    thumb: '/assets/city-clinic.png',
+    desc: 'Telhado vermelho-rubi, relógio e varandas floridas'
+  },
+  {
+    id: 'city_pavilion',
+    name: 'Pavilhão Solário',
+    shortName: 'Solário',
+    icon: '🌲',
+    thumb: '/assets/city-pavilion.png',
+    desc: 'Estufa iluminada de vidro e madeira nobre'
+  },
+  {
+    id: 'city_citadel',
+    name: 'Palácio Vermelho (The Reds)',
+    shortName: 'Palácio',
+    icon: '🏰',
+    thumb: '/assets/city-citadel.png',
+    desc: 'Cidadela acadêmica com torres rubi'
+  }
+];
+
 // 12 lotes organizados em quadras isométricas (prontos para expandir muitas especialidades!)
 export const CITY_LOTS = [
   { id: 'lot-1', u: 1.5, v: 3.1, label: 'Quadra Noroeste A' },
@@ -293,6 +353,7 @@ export function createInitialState() {
         id: 'b-cardio',
         name: 'Cardiologia',
         lotId: 'lot-1',
+        buildingType: 'city_tower',
         color: '#ef4444',
         lastReviewedAt: daysAgoIso(1),
         floors: [
@@ -414,6 +475,7 @@ export function createInitialState() {
         id: 'b-pneumo',
         name: 'Pneumologia',
         lotId: 'lot-2',
+        buildingType: 'city_pavilion',
         color: '#3b82f6',
         lastReviewedAt: daysAgoIso(10),
         floors: [
@@ -650,6 +712,7 @@ export function createInitialState() {
         id: 'b-neuro',
         name: 'Neurologia',
         lotId: 'lot-3',
+        buildingType: 'city_academy',
         color: '#a855f7',
         lastReviewedAt: daysAgoIso(25),
         floors: [
@@ -690,12 +753,32 @@ export function createInitialState() {
   };
 }
 
+export function migrateSavedBuildings(parsed) {
+  if (!parsed || !Array.isArray(parsed.buildings)) return parsed;
+  const legacyDefaults = {
+    'b-cardio': 'city_tower',
+    'b-pneumo': 'city_pavilion',
+    'b-neuro': 'city_academy'
+  };
+  parsed.buildings.forEach((b, idx) => {
+    if (!b.buildingType) {
+      b.buildingType = legacyDefaults[b.id] || BUILDING_TYPES[idx % BUILDING_TYPES.length].id;
+    }
+    // Se algum prédio antigo ainda tinha coordenadas antigas sem lotId válido nos 12 lotes novos
+    if (!CITY_LOTS.some((l) => l.id === b.lotId)) {
+      b.lotId = CITY_LOTS[idx % CITY_LOTS.length].id;
+    }
+  });
+  return parsed;
+}
+
 export function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createInitialState();
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed.customCatalog)) parsed.customCatalog = [];
+    migrateSavedBuildings(parsed);
     syncMayorMilestones(parsed);
     return parsed;
   } catch {

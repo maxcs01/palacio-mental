@@ -1,5 +1,6 @@
-// Desenho Isométrico 2.5D Ilustrado (Cidade Viva Isométrica + Planta Modular + Sprites HD)
+// Desenho Isométrico 2.5D Ilustrado (Cidade Viva Isométrica + Cache GPU Leve + Contorno Limpo)
 import { ROOM_THEMES, CITY_GRID, cityIso } from './data.js';
+import { applyContourMattingToImageData, autoCropTransparentCanvas } from './sheetSlicer.js';
 
 export const INK = '#2b2520';
 
@@ -104,12 +105,29 @@ export const SPRITE_URLS = {
   tb_bcg: '/assets/tb_bcg.png',
   tb_cartilha: '/assets/tb_cartilha.png',
   city_hospital: '/assets/city-hospital.jpg',
+  city_tower: '/assets/city-tower.png',
+  city_academy: '/assets/city-academy.png',
+  city_lab: '/assets/city-lab.png',
+  city_clinic: '/assets/city-clinic.png',
+  city_pavilion: '/assets/city-pavilion.png',
+  city_citadel: '/assets/city-citadel.png',
   city_museum: '/assets/city-museum.jpg',
   city_house: '/assets/city-house.jpg',
   city_tree: '/assets/city-tree.jpg'
 };
 
-const CITY_SPRITE_KEYS = new Set(['city_hospital', 'city_museum', 'city_house', 'city_tree']);
+const CITY_SPRITE_KEYS = new Set([
+  'city_hospital',
+  'city_tower',
+  'city_academy',
+  'city_lab',
+  'city_clinic',
+  'city_pavilion',
+  'city_citadel',
+  'city_museum',
+  'city_house',
+  'city_tree'
+]);
 
 const SPRITE_TUNING = {
   bed: { scale: 1.44, yLift: 0.24, shadowRx: 0.42, shadowRy: 0.20 },
@@ -149,142 +167,104 @@ const SPRITE_TUNING = {
 };
 
 const spriteCache = {};
+const variantCache = new Map();
+let spriteReadyListener = null;
 
-export function processIllustratedSprite(img, skipInnerHoles = false) {
-  const size = 512;
+export function setOnSpriteReady(fn) {
+  spriteReadyListener = fn;
+}
+
+function notifySpriteReady() {
+  if (typeof spriteReadyListener === 'function') spriteReadyListener();
+}
+
+/**
+ * Gera e guarda em cache uma variante de cor (noite, desgastado, velho, murcho) UMA ÚNICA VEZ em CPU,
+ * eliminando 100% o uso de ctx.filter (que trava a placa de vídeo no Canvas 2D!).
+ */
+function getSpriteVariant(key, variant = 'day') {
+  const base = spriteCache[key];
+  if (!base) return null;
+  if (!variant || variant === 'day') return base;
+
+  const cacheKey = `${key}__${variant}`;
+  if (variantCache.has(cacheKey)) return variantCache.get(cacheKey);
+
+  const bw = base.naturalWidth || base.width || 128;
+  const bh = base.naturalHeight || base.height || 128;
+  const scale = Math.min(1, 260 / Math.max(bw, bh));
+  const w = Math.max(16, Math.round(bw * scale));
+  const h = Math.max(16, Math.round(bh * scale));
+
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(base, 0, 0, w, h);
+
+  try {
+    const imgData = g.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      let r = d[i], gr = d[i + 1], b = d[i + 2];
+      const lum = 0.299 * r + 0.587 * gr + 0.114 * b;
+
+      if (variant === 'worn') {
+        r = (r * 0.65 + lum * 0.35) * 0.93;
+        gr = (gr * 0.65 + lum * 0.35) * 0.93;
+        b = (b * 0.65 + lum * 0.35) * 0.93;
+      } else if (variant === 'old') {
+        r = (r * 0.28 + lum * 0.72) * 0.82;
+        gr = (gr * 0.28 + lum * 0.72) * 0.82;
+        b = (b * 0.28 + lum * 0.72) * 0.82;
+      } else if (variant === 'night') {
+        r = r * 0.78;
+        gr = gr * 0.83;
+        b = Math.min(255, b * 0.92 + 6);
+      } else if (variant === 'wilted') {
+        r = Math.min(255, (r * 0.5 + lum * 0.5) * 0.95 + 14);
+        gr = (gr * 0.55 + lum * 0.45) * 0.86;
+        b = (b * 0.45 + lum * 0.55) * 0.72;
+      }
+      d[i] = r;
+      d[i + 1] = gr;
+      d[i + 2] = b;
+    }
+    g.putImageData(imgData, 0, 0);
+  } catch {}
+
+  variantCache.set(cacheKey, c);
+  return c;
+}
+
+/**
+ * Recorta sprites individuais preservando proporção real e respeitando o contorno com Sobel + Defringe!
+ */
+export function processIllustratedSprite(img, skipInnerHoles = false, customOpts = {}) {
+  const rawW = img.naturalWidth || img.width || 512;
+  const rawH = img.naturalHeight || img.height || 512;
+  const maxSide = 512;
+  const scale = Math.min(1, maxSide / Math.max(rawW, rawH));
+  const w = Math.max(32, Math.round(rawW * scale));
+  const h = Math.max(32, Math.round(rawH * scale));
+
   const off = document.createElement('canvas');
-  off.width = size;
-  off.height = size;
+  off.width = w;
+  off.height = h;
   const octx = off.getContext('2d', { willReadFrequently: true });
-  octx.drawImage(img, 0, 0, size, size);
-  const imgData = octx.getImageData(0, 0, size, size);
-  const d = imgData.data;
+  octx.drawImage(img, 0, 0, w, h);
 
-  // Passo 1: Flood-fill a partir de toda a borda para remover fundo branco externo
-  const visited = new Uint8Array(size * size);
-  const stack = [];
-  for (let i = 0; i < size; i++) {
-    stack.push(i);
-    stack.push((size - 1) * size + i);
-    stack.push(i * size);
-    stack.push(i * size + (size - 1));
-  }
-
-  const isOuterWhite = (idx) => {
-    const r = d[idx], g = d[idx + 1], b = d[idx + 2];
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    return r > 232 && g > 232 && b > 232 && (max - min) < 20;
-  };
-
-  while (stack.length > 0) {
-    const p = stack.pop();
-    if (visited[p]) continue;
-    visited[p] = 1;
-    const i = p * 4;
-    if (!isOuterWhite(i)) continue;
-    d[i + 3] = 0;
-    const x = p % size;
-    const y = (p - x) / size;
-    if (x > 0) stack.push(p - 1);
-    if (x < size - 1) stack.push(p + 1);
-    if (y > 0) stack.push(p - size);
-    if (y < size - 1) stack.push(p + size);
-  }
-
-  // Passo 2: Limpar frestas puramente brancas presas entre pernas/rodas (somente em móveis)
-  if (!skipInnerHoles) {
-    const lowerStart = Math.floor(size * 0.48);
-    const holeVis = new Uint8Array(size * size);
-    const isPureWhite = (idx) => {
-      const r = d[idx], g = d[idx + 1], b = d[idx + 2], a = d[idx + 3];
-      if (a === 0) return false;
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      return r >= 249 && g >= 249 && b >= 249 && (max - min) <= 6;
-    };
-
-    for (let y = lowerStart; y < size - 1; y++) {
-      for (let x = 1; x < size - 1; x++) {
-        const p0 = y * size + x;
-        if (holeVis[p0] || !isPureWhite(p0 * 4)) continue;
-        const comp = [];
-        const q = [p0];
-        let touchesUpper = false;
-        while (q.length > 0) {
-          const p = q.pop();
-          if (holeVis[p]) continue;
-          holeVis[p] = 1;
-          if (!isPureWhite(p * 4)) continue;
-          const px = p % size;
-          const py = (p - px) / size;
-          if (py < lowerStart - 6) touchesUpper = true;
-          comp.push(p);
-          if (px > 0) q.push(p - 1);
-          if (px < size - 1) q.push(p + 1);
-          if (py > 0) q.push(p - size);
-          if (py < size - 1) q.push(p + size);
-        }
-        if (!touchesUpper && comp.length >= 12 && comp.length < 18000) {
-          for (let k = 0; k < comp.length; k++) {
-            d[comp[k] * 4 + 3] = 0;
-          }
-        }
-      }
-    }
-  }
-
-  // Passo 3: Suavização de 1px na borda (remove halo branco)
-  const alphaCopy = new Uint8Array(size * size);
-  for (let p = 0; p < size * size; p++) alphaCopy[p] = d[p * 4 + 3];
-  for (let y = 1; y < size - 1; y++) {
-    for (let x = 1; x < size - 1; x++) {
-      const p = y * size + x;
-      if (alphaCopy[p] === 0) continue;
-      const nearTransp =
-        alphaCopy[p - 1] === 0 ||
-        alphaCopy[p + 1] === 0 ||
-        alphaCopy[p - size] === 0 ||
-        alphaCopy[p + size] === 0;
-      if (nearTransp) {
-        const i = p * 4;
-        const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
-        if (lum > 215) {
-          d[i + 3] = Math.max(0, Math.round((255 - lum) * 4));
-        }
-      }
-    }
-  }
-
+  const imgData = octx.getImageData(0, 0, w, h);
+  applyContourMattingToImageData(imgData, w, h, {
+    tolerance: customOpts.tolerance ?? 26,
+    edgeStrength: customOpts.edgeStrength ?? 38,
+    defringe: customOpts.defringe ?? true,
+    skipInnerHoles
+  });
   octx.putImageData(imgData, 0, 0);
 
-  // Passo 4: Auto-crop
-  let minX = size, minY = size, maxX = 0, maxY = 0;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      if (d[(y * size + x) * 4 + 3] > 24) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
-  if (maxX <= minX || maxY <= minY) return off;
-
-  const pad = 4;
-  minX = Math.max(0, minX - pad);
-  minY = Math.max(0, minY - pad);
-  maxX = Math.min(size - 1, maxX + pad);
-  maxY = Math.min(size - 1, maxY + pad);
-  const cw = maxX - minX + 1;
-  const ch = maxY - minY + 1;
-
-  const cropped = document.createElement('canvas');
-  cropped.width = cw;
-  cropped.height = ch;
-  cropped.getContext('2d').drawImage(off, minX, minY, cw, ch, 0, 0, cw, ch);
-  return cropped;
+  return autoCropTransparentCanvas(off, 4);
 }
 
 Object.entries(SPRITE_URLS).forEach(([key, url]) => {
@@ -299,6 +279,8 @@ Object.entries(SPRITE_URLS).forEach(([key, url]) => {
     } catch {
       spriteCache[key] = img;
     }
+    variantCache.clear();
+    notifySpriteReady();
   };
   img.src = url;
 });
@@ -343,6 +325,7 @@ export function registerCustomSprites(customCatalog = []) {
           spriteCache[item.id] = img;
         }
       }
+      notifySpriteReady();
     };
     img.src = item.thumb;
   });
@@ -509,12 +492,12 @@ function drawCroppedSpriteAt(ctx, sp, cx, bottomY, maxSize) {
     dw = maxSize * ratio;
   }
   ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
+  ctx.imageSmoothingQuality = 'medium';
   ctx.drawImage(sp, cx - dw / 2, bottomY - dh, dw, dh);
   return { dw, dh };
 }
 
-// ---------------- CIDADE ISOMÉTRICA 2.5D REAL (12 QUADRAS ORGANIZADAS + MARCOS FIXOS) ----------------
+// ---------------- CIDADE ISOMÉTRICA 2.5D COM CACHE ESTÁTICO DE GPU ----------------
 function traceIsoQuad(ctx, u1, v1, u2, v2) {
   const p1 = cityIso(u1, v1);
   const p2 = cityIso(u2, v1);
@@ -541,13 +524,25 @@ function drawIsoQuad(ctx, u1, v1, u2, v2, fill, stroke = null, lineWidth = 1.4) 
   }
 }
 
-export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isNight, trafficLightGreen, now, ducks, hasFountain, hasPier }) {
-  ctx.save();
+// Cache offscreen do mapa base da cidade (evita redesenhar 350+ vetores/gradientes a cada frame!)
+let cityStaticCanvas = null;
+let cityStaticKey = '';
+
+function getOrBuildCityStaticLayer(WORLD_W, WORLD_H, isNight, hasFountain, hasPier) {
+  const nextKey = `${WORLD_W}x${WORLD_H}_${isNight ? 1 : 0}_${hasFountain ? 1 : 0}_${hasPier ? 1 : 0}`;
+  if (cityStaticCanvas && cityStaticKey === nextKey) {
+    return cityStaticCanvas;
+  }
+
+  const off = document.createElement('canvas');
+  off.width = WORLD_W;
+  off.height = WORLD_H;
+  const ctx = off.getContext('2d');
   const grain = getPaperGrainPattern(ctx);
   const cols = CITY_GRID.cols;
   const rows = CITY_GRID.rows;
 
-  // 1. Mar + Horizonte ilustrado ao redor de toda a ilha isométrica
+  // 1. Mar + Horizonte ilustrado
   const bgGrad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
   if (isNight) {
     bgGrad.addColorStop(0, '#0c1629');
@@ -563,12 +558,11 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
-  // Ondinhas suaves no mar ao redor da ilha
-  const surf = Math.sin(now * 0.0022) * 5;
-  ctx.strokeStyle = isNight ? 'rgba(186, 230, 253, 0.20)' : 'rgba(255, 255, 255, 0.48)';
+  // Ondinhas decorativas leves no mar
+  ctx.strokeStyle = isNight ? 'rgba(186, 230, 253, 0.20)' : 'rgba(255, 255, 255, 0.45)';
   ctx.lineWidth = 2;
-  for (let i = 0; i < 18; i++) {
-    const wx = ((i * 137) % (WORLD_W - 140)) + 50 + surf * (i % 2 === 0 ? 1 : -1);
+  for (let i = 0; i < 16; i++) {
+    const wx = ((i * 137) % (WORLD_W - 140)) + 50;
     const wy = 480 + ((i * 97) % (WORLD_H - 520));
     ctx.beginPath();
     ctx.moveTo(wx, wy);
@@ -576,7 +570,7 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.stroke();
   }
 
-  // 2. Cadeia de montanhas ilustradas acompanhando a borda norte da ilha (u=0 e v=0)
+  // 2. Cadeia de montanhas ilustradas
   ctx.strokeStyle = INK;
   ctx.lineWidth = 1.6;
   ctx.lineJoin = 'round';
@@ -600,7 +594,6 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.fill();
     ctx.stroke();
 
-    // Face sombreada direita
     ctx.fillStyle = isNight ? 'rgba(15,23,42,0.34)' : 'rgba(43,37,32,0.14)';
     ctx.beginPath();
     ctx.moveTo(mx + mw * 0.5, baseY - mh);
@@ -609,7 +602,6 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.closePath();
     ctx.fill();
 
-    // Topo nevado creme
     ctx.fillStyle = isNight ? '#cbd5e1' : '#f7f4ea';
     ctx.beginPath();
     ctx.moveTo(mx + mw * 0.34, baseY - mh * 0.67);
@@ -622,30 +614,26 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.stroke();
   });
 
-  // 3. Faixa de areia da praia + Sombra da ilha na água
-  const pTop = cityIso(0, 0);
+  // 3. Faixa de areia + falésia 3D da ilha
   const pRight = cityIso(cols, 0);
   const pBottom = cityIso(cols, rows);
   const pLeft = cityIso(0, rows);
   const slabH = 24;
 
-  // Orla de areia quente na frente (bordas sul-oeste e sul-leste)
   drawIsoQuad(ctx, -0.35, rows, cols + 0.9, rows + 1.05, isNight ? '#594e3f' : '#ecd9ae', INK, 1.5);
   drawIsoQuad(ctx, cols, -0.35, cols + 0.9, rows + 1.05, isNight ? '#4f4537' : '#e4cf9f', INK, 1.5);
 
-  // Espuma na linha da praia
   ctx.strokeStyle = isNight ? 'rgba(186, 230, 253, 0.30)' : 'rgba(255, 255, 255, 0.72)';
   ctx.lineWidth = 2.4;
   const beachSW = cityIso(-0.35, rows + 1.05);
   const beachS = cityIso(cols + 0.9, rows + 1.05);
   const beachSE = cityIso(cols + 0.9, -0.35);
   ctx.beginPath();
-  ctx.moveTo(beachSW.x, beachSW.y + 4 + surf * 0.2);
-  ctx.lineTo(beachS.x, beachS.y + 4 + surf * 0.2);
-  ctx.lineTo(beachSE.x, beachSE.y + 4 + surf * 0.2);
+  ctx.moveTo(beachSW.x, beachSW.y + 4);
+  ctx.lineTo(beachS.x, beachS.y + 4);
+  ctx.lineTo(beachSE.x, beachSE.y + 4);
   ctx.stroke();
 
-  // Base 3D da ilha (falésia de terra nas duas faces frontais)
   ctx.strokeStyle = INK;
   ctx.lineWidth = 1.6;
   ctx.fillStyle = isNight ? '#4a3d31' : '#a9855d';
@@ -668,7 +656,6 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
   ctx.fill();
   ctx.stroke();
 
-  // Superfície base da ilha (calçamento / gramado geral)
   drawIsoQuad(ctx, 0, 0, cols, rows, isNight ? '#21372e' : '#8cb476', INK, 1.8);
   if (grain) {
     traceIsoQuad(ctx, 0, 0, cols, rows);
@@ -676,29 +663,17 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.fill();
   }
 
-  // 4. Avenidas Isométricas (exatamente no mesmo ângulo 2:1 dos prédios!)
+  // 4. Avenidas Isométricas
   const roadColor = isNight ? '#273244' : '#596678';
   const sidewalkColor = isNight ? '#475569' : '#e8e0cd';
   const uRoads = [5, 10, 15];
   const vRoads = [5, 10];
 
-  // Calçadas base sob as avenidas
-  uRoads.forEach((ru) => {
-    drawIsoQuad(ctx, ru - 0.16, 0, ru + 1.16, rows, sidewalkColor);
-  });
-  vRoads.forEach((rv) => {
-    drawIsoQuad(ctx, 0, rv - 0.16, cols, rv + 1.16, sidewalkColor);
-  });
+  uRoads.forEach((ru) => drawIsoQuad(ctx, ru - 0.16, 0, ru + 1.16, rows, sidewalkColor));
+  vRoads.forEach((rv) => drawIsoQuad(ctx, 0, rv - 0.16, cols, rv + 1.16, sidewalkColor));
+  uRoads.forEach((ru) => drawIsoQuad(ctx, ru, 0, ru + 1, rows, roadColor));
+  vRoads.forEach((rv) => drawIsoQuad(ctx, 0, rv, cols, rv + 1, roadColor));
 
-  // Asfalto das avenidas
-  uRoads.forEach((ru) => {
-    drawIsoQuad(ctx, ru, 0, ru + 1, rows, roadColor);
-  });
-  vRoads.forEach((rv) => {
-    drawIsoQuad(ctx, 0, rv, cols, rv + 1, roadColor);
-  });
-
-  // Faixas tracejadas centrais seguindo as diagonais isométricas
   ctx.strokeStyle = isNight ? 'rgba(253, 224, 71, 0.55)' : 'rgba(248, 245, 232, 0.72)';
   ctx.lineWidth = 1.8;
   ctx.setLineDash([10, 10]);
@@ -720,19 +695,17 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
   });
   ctx.setLineDash([]);
 
-  // Faixas de pedestre nos cruzamentos principais
   uRoads.forEach((ru) => {
     vRoads.forEach((rv) => {
-      // Quadrado limpo do cruzamento (cobre a linha tracejada no meio)
       drawIsoQuad(ctx, ru, rv, ru + 1, rv + 1, roadColor);
       ctx.strokeStyle = 'rgba(248, 245, 232, 0.85)';
       ctx.lineWidth = 2.2;
       for (let s = 0; s < 4; s++) {
-        const off = 0.2 + s * 0.2;
-        const c1 = cityIso(ru + off, rv - 0.14);
-        const c2 = cityIso(ru + off, rv - 0.02);
-        const c3 = cityIso(ru - 0.14, rv + off);
-        const c4 = cityIso(ru - 0.02, rv + off);
+        const offS = 0.2 + s * 0.2;
+        const c1 = cityIso(ru + offS, rv - 0.14);
+        const c2 = cityIso(ru + offS, rv - 0.02);
+        const c3 = cityIso(ru - 0.14, rv + offS);
+        const c4 = cityIso(ru - 0.02, rv + offS);
         ctx.beginPath();
         ctx.moveTo(c1.x, c1.y); ctx.lineTo(c2.x, c2.y);
         ctx.moveTo(c3.x, c3.y); ctx.lineTo(c4.x, c4.y);
@@ -741,16 +714,13 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     });
   });
 
-  // 5. 12 Quadras Isométricas Organizadas (com meio-fio creme e gramado limpo)
+  // 5. 12 Quadras Isométricas Organizadas
   const uBlocks = [[0.18, 4.82], [6.18, 9.82], [11.18, 14.82], [16.18, 19.82]];
   const vBlocks = [[0.18, 4.82], [6.18, 9.82], [11.18, 14.82]];
 
   uBlocks.forEach(([u1, u2], bi) => {
     vBlocks.forEach(([v1, v2], bj) => {
-      // Borda da calçada da quadra
       drawIsoQuad(ctx, u1, v1, u2, v2, sidewalkColor, INK, 1.3);
-
-      // Quadra central (bi===1, bj===1) é a Praça Central Isométrica!
       if (bi === 1 && bj === 1) {
         drawIsoQuad(ctx, u1 + 0.18, v1 + 0.18, u2 - 0.18, v2 - 0.18, isNight ? '#334155' : '#ede6d5', INK, 1.1);
         drawIsoQuad(ctx, u1 + 0.42, v1 + 0.42, u2 - 0.42, v2 - 0.42, isNight ? '#1f4033' : '#8fd182', INK, 1.1);
@@ -761,7 +731,7 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     });
   });
 
-  // 6. Detalhes da Praça Central Isométrica (u: 6.2..9.8, v: 6.2..9.8)
+  // 6. Praça Central (lago, bacia da fonte e bancos)
   const pondC = cityIso(8.15, 8.15);
   ctx.fillStyle = isNight ? '#475569' : '#d6ccb8';
   ctx.strokeStyle = INK;
@@ -785,31 +755,13 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
   ctx.fill();
   ctx.stroke();
 
-  // Ondinhas no lago
-  const waveShift = Math.sin(now * 0.002) * 3;
-  ctx.strokeStyle = 'rgba(255,255,255,0.48)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
   ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.moveTo(pondC.x - 18 + waveShift, pondC.y - 4);
-  ctx.quadraticCurveTo(pondC.x - 6 + waveShift, pondC.y - 7, pondC.x + 6 + waveShift, pondC.y - 4);
+  ctx.moveTo(pondC.x - 16, pondC.y - 4);
+  ctx.quadraticCurveTo(pondC.x - 4, pondC.y - 7, pondC.x + 8, pondC.y - 4);
   ctx.stroke();
 
-  // Patinhos no lago
-  ducks.forEach((d) => {
-    const dp = cityIso(d.u, d.v);
-    const dy = dp.y + Math.sin(d.angle) * 2;
-    ctx.fillStyle = '#fef08a';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.ellipse(dp.x, dy, 4.2, 2.8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#f97316';
-    ctx.fillRect(dp.x + 3.2, dy - 1, 2.2, 1.8);
-  });
-
-  // Fonte permanente da praça (2 rondas!)
   if (hasFountain) {
     const fc = cityIso(7.1, 7.1);
     ctx.fillStyle = '#e8e0ce';
@@ -823,22 +775,14 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.beginPath();
     ctx.ellipse(fc.x, fc.y, 11, 6, 0, 0, Math.PI * 2);
     ctx.fill();
-    const spH = 9 + Math.sin(now * 0.006) * 2.5;
-    ctx.strokeStyle = '#e0f2fe';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(fc.x, fc.y);
-    ctx.lineTo(fc.x, fc.y - spH);
-    ctx.stroke();
   }
 
-  // Banquinhos de madeira na praça
   [[6.9, 9.0], [9.1, 6.9]].forEach(([bu, bv]) => {
     const bp = cityIso(bu, bv);
     drawIsoBox(ctx, bp.x, bp.y + 2, 18, 9, 5, '#b68153', '#96653d', '#7b5130', INK);
   });
 
-  // 7. Deck de madeira + barquinho no mar (marco permanente com 5 rondas!)
+  // 7. Deck de madeira do Pier (estático)
   if (hasPier) {
     drawIsoQuad(ctx, 9.6, rows + 0.3, 10.6, rows + 2.2, '#a47148', INK, 1.4);
     for (let s = 0.6; s <= 2.0; s += 0.35) {
@@ -851,43 +795,14 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
     }
-    const boatP = cityIso(11.3, rows + 2.1);
-    const boatY = boatP.y + Math.sin(now * 0.003) * 2.5;
-    ctx.fillStyle = '#f8f5ec';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(boatP.x - 14, boatY);
-    ctx.lineTo(boatP.x + 14, boatY);
-    ctx.lineTo(boatP.x + 9, boatY + 8);
-    ctx.lineTo(boatP.x - 9, boatY + 8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#ef4444';
-    ctx.beginPath();
-    ctx.moveTo(boatP.x, boatY - 2);
-    ctx.lineTo(boatP.x, boatY - 20);
-    ctx.lineTo(boatP.x + 12, boatY - 4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
   }
 
-  // 8. Semáforos + Postes de luz nas esquinas das avenidas
+  // 8. Postes de luz e caixas dos semáforos
   [[5.0, 5.0], [10.0, 5.0], [10.0, 10.0]].forEach(([su, sv]) => {
     const sp = cityIso(su - 0.12, sv - 0.12);
     ctx.fillStyle = '#2b2520';
     ctx.beginPath();
     ctx.roundRect(sp.x - 5, sp.y - 24, 10, 20, 3);
-    ctx.fill();
-    ctx.fillStyle = trafficLightGreen ? '#22c55e' : '#ef4444';
-    ctx.beginPath();
-    ctx.arc(sp.x, sp.y - 18, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = trafficLightGreen ? '#14532d' : '#7f1d1d';
-    ctx.beginPath();
-    ctx.arc(sp.x, sp.y - 10, 2.8, 0, Math.PI * 2);
     ctx.fill();
   });
 
@@ -920,6 +835,81 @@ export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isN
     ctx.stroke();
   });
 
+  cityStaticCanvas = off;
+  cityStaticKey = nextKey;
+  return off;
+}
+
+export function drawIllustratedCityLandscape(ctx, WORLD_W, WORLD_H, _TILE, { isNight, trafficLightGreen, now, ducks, hasFountain, hasPier, ecoMode = false }) {
+  ctx.save();
+  const staticLayer = getOrBuildCityStaticLayer(WORLD_W, WORLD_H, isNight, hasFountain, hasPier);
+  ctx.drawImage(staticLayer, 0, 0);
+
+  const rows = CITY_GRID.rows;
+  const animNow = ecoMode ? 0 : now;
+
+  // Detalhes levíssimos (patinhos, jato da fonte, barquinho e luzes do semáforo)
+  ducks.forEach((d) => {
+    const dp = cityIso(d.u, d.v);
+    const dy = dp.y + (ecoMode ? 0 : Math.sin(d.angle) * 2);
+    ctx.fillStyle = '#fef08a';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(dp.x, dy, 4.2, 2.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(dp.x + 3.2, dy - 1, 2.2, 1.8);
+  });
+
+  if (hasFountain) {
+    const fc = cityIso(7.1, 7.1);
+    const spH = 9 + (ecoMode ? 0 : Math.sin(animNow * 0.006) * 2.5);
+    ctx.strokeStyle = '#e0f2fe';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(fc.x, fc.y);
+    ctx.lineTo(fc.x, fc.y - spH);
+    ctx.stroke();
+  }
+
+  if (hasPier) {
+    const boatP = cityIso(11.3, rows + 2.1);
+    const boatY = boatP.y + (ecoMode ? 0 : Math.sin(animNow * 0.003) * 2.5);
+    ctx.fillStyle = '#f8f5ec';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(boatP.x - 14, boatY);
+    ctx.lineTo(boatP.x + 14, boatY);
+    ctx.lineTo(boatP.x + 9, boatY + 8);
+    ctx.lineTo(boatP.x - 9, boatY + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(boatP.x, boatY - 2);
+    ctx.lineTo(boatP.x, boatY - 20);
+    ctx.lineTo(boatP.x + 12, boatY - 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  [[5.0, 5.0], [10.0, 5.0], [10.0, 10.0]].forEach(([su, sv]) => {
+    const sp = cityIso(su - 0.12, sv - 0.12);
+    ctx.fillStyle = trafficLightGreen ? '#22c55e' : '#ef4444';
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y - 18, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = trafficLightGreen ? '#14532d' : '#7f1d1d';
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y - 10, 2.8, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
   ctx.restore();
 }
 
@@ -944,11 +934,21 @@ export function drawIsoLotEmpty(ctx, u, v, isNight = false) {
   ctx.restore();
 }
 
-export function drawPixelBuilding(ctx, u, v, baseColor, condition, isNight, label) {
+const BUILDING_SIZE_TUNING = {
+  city_hospital: 102,
+  city_tower: 108,
+  city_academy: 104,
+  city_lab: 102,
+  city_clinic: 104,
+  city_pavilion: 104,
+  city_citadel: 110
+};
+
+export function drawPixelBuilding(ctx, u, v, baseColor, condition, isNight, label, buildingType = 'city_hospital') {
   ctx.save();
   const c = cityIso(u, v);
 
-  // Fundação isométrica firme no terreno (evita aparência de prédio flutuando!)
+  // Fundação isométrica firme no terreno
   const padR = 1.02;
   drawIsoQuad(
     ctx,
@@ -960,7 +960,6 @@ export function drawPixelBuilding(ctx, u, v, baseColor, condition, isNight, labe
     baseColor || '#38bdf8',
     2
   );
-  // Sombra de contato colada sob a base do prédio
   drawIsoQuad(
     ctx,
     u - 0.80,
@@ -971,20 +970,15 @@ export function drawPixelBuilding(ctx, u, v, baseColor, condition, isNight, labe
   );
 
   const bottomY = c.y + 35;
-  const sp = spriteCache.city_hospital;
-  if (sp) {
-    ctx.save();
-    if (condition === 'worn') {
-      ctx.filter = 'saturate(0.65) brightness(0.93)';
-    } else if (condition === 'old') {
-      ctx.filter = 'saturate(0.28) brightness(0.82) contrast(0.95)';
-    } else if (isNight) {
-      ctx.filter = 'brightness(0.88)';
-    }
-    drawCroppedSpriteAt(ctx, sp, c.x, bottomY, 102);
-    ctx.restore();
+  const spriteKey = SPRITE_URLS[buildingType] ? buildingType : 'city_hospital';
+  const variant =
+    condition === 'worn' ? 'worn' : condition === 'old' ? 'old' : isNight ? 'night' : 'day';
+  const sp = getSpriteVariant(spriteKey, variant);
+  const maxSize = BUILDING_SIZE_TUNING[spriteKey] || 102;
 
-    // Mato/folhagens na entrada quando o prédio está velho (precisa revisar!)
+  if (sp) {
+    drawCroppedSpriteAt(ctx, sp, c.x, bottomY, maxSize);
+
     if (condition === 'old') {
       ctx.fillStyle = '#536e4b';
       ctx.strokeStyle = INK;
@@ -1005,7 +999,7 @@ export function drawPixelBuilding(ctx, u, v, baseColor, condition, isNight, labe
   ctx.font = 'bold 10.5px system-ui, sans-serif';
   const textW = ctx.measureText(label).width;
   const tagW = Math.max(82, textW + 30);
-  const tagY = bottomY - 110;
+  const tagY = bottomY - (maxSize + 10);
 
   ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
   ctx.strokeStyle = baseColor || '#94a3b8';
@@ -1031,18 +1025,14 @@ export function drawHouse(ctx, u, v, roofColor, isNight) {
   ctx.save();
   const c = cityIso(u, v);
 
-  // Quintal / base isométrica firme para a casa ficar apoiada no chão (sem sombra solta flutuando!)
   const r = 0.62;
   drawIsoQuad(ctx, u - r, v - r, u + r, v + r, isNight ? '#2d3c36' : '#ddd4be', 'rgba(43,37,32,0.28)', 1.1);
   drawIsoQuad(ctx, u - 0.50, v - 0.50, u + 0.56, v + 0.56, 'rgba(24, 20, 16, 0.14)');
 
   const bottomY = c.y + 21;
-  const sp = spriteCache.city_house;
+  const sp = getSpriteVariant('city_house', isNight ? 'night' : 'day');
   if (sp) {
-    ctx.save();
-    if (isNight) ctx.filter = 'brightness(0.84)';
     drawCroppedSpriteAt(ctx, sp, c.x, bottomY, 64);
-    ctx.restore();
   } else {
     drawIsoBox(ctx, c.x, bottomY - 6, 36, 18, 20, '#f1ede4', '#e8e2d5', '#d6cfc0', INK);
     drawIsoBox(ctx, c.x, bottomY - 26, 40, 20, 6, roofColor || '#d97b48', roofColor || '#d97b48', '#334155', INK);
@@ -1054,18 +1044,14 @@ export function drawMuseum(ctx, u, v, isNight) {
   ctx.save();
   const c = cityIso(u, v);
 
-  // Base em mármore isométrica para o Museu Permanente
   const r = 1.05;
   drawIsoQuad(ctx, u - r, v - r, u + r, v + r, isNight ? '#3b4252' : '#efe7d2', '#f59e0b', 1.8);
   drawIsoQuad(ctx, u - 0.82, v - 0.82, u + 0.88, v + 0.88, 'rgba(24, 20, 16, 0.16)');
 
   const bottomY = c.y + 34;
-  const sp = spriteCache.city_museum;
+  const sp = getSpriteVariant('city_museum', isNight ? 'night' : 'day');
   if (sp) {
-    ctx.save();
-    if (isNight) ctx.filter = 'brightness(0.88)';
     drawCroppedSpriteAt(ctx, sp, c.x, bottomY, 100);
-    ctx.restore();
   } else {
     drawIsoBox(ctx, c.x, bottomY - 8, 62, 32, 30, '#fef3c7', '#f5e8c7', '#e2d0a7', INK);
   }
@@ -1091,22 +1077,15 @@ export function drawTree(ctx, u, v, wilted, isNight = false) {
   const c = cityIso(u, v);
   const bottomY = c.y + 13;
 
-  // Pequena sombra rente ao tronco no solo
   ctx.fillStyle = 'rgba(24, 20, 16, 0.16)';
   ctx.beginPath();
   ctx.ellipse(c.x, bottomY - 3, 12, 5.5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  const sp = spriteCache.city_tree;
+  const variant = wilted ? 'wilted' : isNight ? 'night' : 'day';
+  const sp = getSpriteVariant('city_tree', variant);
   if (sp) {
-    ctx.save();
-    if (wilted) {
-      ctx.filter = 'sepia(0.55) saturate(0.6) brightness(0.88)';
-    } else if (isNight) {
-      ctx.filter = 'brightness(0.78)';
-    }
     drawCroppedSpriteAt(ctx, sp, c.x, bottomY, 46);
-    ctx.restore();
   } else {
     ctx.strokeStyle = INK;
     ctx.lineWidth = 1.4;
@@ -1295,7 +1274,7 @@ export function drawRoomObject(ctx, type, cx, cy, tileW, { editMode = false, hig
     const drawX = cx - dw / 2;
     const drawY = cy + tileW * tune.yLift - dh;
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = 'medium';
     if (flip) {
       ctx.save();
       ctx.translate(cx, 0);
